@@ -1,0 +1,35 @@
+[project]
+name = "orbtrack"
+version = "0.1.0"
+description = "Local, AI-assisted space situational awareness: live orbits, passes and maneuver detection"
+authors = [
+    { name = "sakshia08", email = "connect.sakshi.ahuja@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28.1",
+    "numpy>=2.5.4",
+    "sgp4>=2.27",
+    "skyfield>=1.55",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.4.0",
+    "matplotlib>=3.11.2",
+    "pytest>=9.1.1",
+]
+
+[project.scripts]
+orbtrack = "orbtrack.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    # Skyfield 1.55 sets ndarray.dtype, deprecated in NumPy 2.5; harmless.
+    "ignore:Setting the dtype on a NumPy array:DeprecationWarning:skyfield",
+]

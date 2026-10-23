@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+*.bsp
+# TLE files Skyfield downloads when the notebooks run locally
+notebooks/*.txt
