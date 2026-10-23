@@ -1,6 +1,6 @@
 # OrbTrack AI — Build Plan
 
-_Last updated 2026-10-23. Product spec: [PRD.md](PRD.md)._
+_Last updated 2026-10-23. Product spec: [PRD.md](PRD.md). What each finished phase added: [CHANGELOG.md](CHANGELOG.md)._
 
 Six phases, no deadlines. Each phase ends in something you can demo and a gate it must pass; when the gate passes, the phase is committed and pushed before the next one starts.
 
@@ -22,3 +22,13 @@ The order follows the fun: the globe and HUD come first because they are the rew
 - [x] `pyproject.toml` managed with `uv`; `pytest` suite that runs offline from a frozen TLE fixture
 - [x] ISS pass test for one city, cross-checked against an independent brute-force elevation search
 - [ ] Free Space-Track.org account created, so history downloads are ready by Phase 4
+
+## Phase 2 · Live globe
+
+- [x] NiceGUI app shell (`orbtrack app`) with a glass HUD: clock, orbit legend, quick targets
+- [x] globe.gl element with vendored three.js and Earth textures (works offline)
+- [x] Full active catalog as one GPU point cloud, interpolated between server keyframes
+- [x] Real-time day/night terminator with city lights, ocean glint and atmosphere
+- [x] Click-to-follow camera with comet trail, orbit-ahead line, live telemetry and next pass
+- [x] First frame with satellites in under 3 s (1.1–1.4 s measured headless)
+- [ ] Smooth animation of the full catalog checked on your own laptop

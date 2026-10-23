@@ -1,4 +1,4 @@
-"""Command line: `orbtrack where ISS`, `orbtrack passes ISS`, `orbtrack catalog`."""
+"""Command line: `orbtrack app`, `orbtrack where ISS`, `orbtrack passes ISS`, `orbtrack catalog`."""
 
 import argparse
 import sys
@@ -61,6 +61,12 @@ def cmd_catalog(args, catalog: Catalog) -> None:
         print(f"  {cls:9s} {n}")
 
 
+def cmd_app(args) -> None:
+    from orbtrack.app.main import serve
+
+    serve(group=args.group, port=args.port, show=not args.no_browser)
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="orbtrack", description=__doc__)
     parser.add_argument("--group", default="active", help="CelesTrak group (default: active)")
@@ -82,8 +88,16 @@ def main(argv: list[str] | None = None) -> None:
     catalog = sub.add_parser("catalog", help="summary of the catalog")
     catalog.set_defaults(func=cmd_catalog)
 
+    app = sub.add_parser("app", help="open the live 3D globe in your browser")
+    app.add_argument("--port", type=int, default=8080)
+    app.add_argument("--no-browser", action="store_true", help="don't open a browser tab")
+    app.set_defaults(func=cmd_app)
+
     args = parser.parse_args(argv)
-    args.func(args, Catalog.from_celestrak(args.group, load.timescale()))
+    if args.func is cmd_app:
+        cmd_app(args)
+    else:
+        args.func(args, Catalog.from_celestrak(args.group, load.timescale()))
 
 
 if __name__ == "__main__":

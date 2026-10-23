@@ -140,7 +140,7 @@ Data flows down from free public sources into a local DuckDB file. NiceGUI serve
 | Layer | Choice | Why |
 | --- | --- | --- |
 | UI framework | NiceGUI | Pure Python, built on FastAPI, dark Quasar components, and custom elements for anything WebGL |
-| 3D globe | globe.gl (three.js), one vendored JS file wrapped as a NiceGUI element | The best-looking globe you can get without a JS build: atmosphere glow, night lights, particle layers, arcs and trails |
+| 3D globe | globe.gl (three.js), vendored JS files wrapped as a NiceGUI element | The best-looking globe you can get without a JS build: atmosphere glow, night lights, particle layers, arcs and trails |
 | Propagation | Skyfield + `sgp4` (`SatrecArray`, vectorised) | What you already used; NumPy-fast for the whole catalog |
 | Storage | DuckDB + Parquet | No database server; fast SQL over years of TLE history in one file |
 | Scheduling | APScheduler inside the app | Fetches CelesTrak, Space-Track and NOAA on a timer without cron |
