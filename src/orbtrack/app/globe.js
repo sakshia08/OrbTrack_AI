@@ -123,6 +123,7 @@ const SAT_VERTEX = `
   uniform float uPixelRatio;
   uniform float uSizeScale;
   uniform float uVisible[5];
+  uniform float uFade;
   uniform vec3 uSun;
   varying vec3 vTint;
   void main() {
@@ -140,7 +141,7 @@ const SAT_VERTEX = `
     float visible = uVisible[int(cls + 0.5)];
     float px = size * uSizeScale * uPixelRatio * 1400.0 / -mv.z;
     gl_PointSize = visible * mix(0.8, 1.0, lit) * clamp(px, 2.2 * uPixelRatio, 10.0 * uPixelRatio);
-    vTint = tint * mix(0.3, 1.0, lit);
+    vTint = tint * mix(0.3, 1.0, lit) * uFade;
   }`;
 
 const SAT_FRAGMENT = `
@@ -186,6 +187,25 @@ const SKY_FRAGMENT = `
 const OMEGA_EARTH = 7.2921158553e-5; // rad/s, sidereal
 const DEG = Math.PI / 180;
 const SKY_SIZE_SCALE = 0.06; // satellites are much closer to the camera when looking up from the ground
+const REPLAY_CYCLE_MS = 9000; // one loop of a replay: half an orbit before the burn, half after
+const REPLAY_FADE = 0.3; // the rest of the swarm steps back while a replay runs
+
+function glowTexture(THREE) {
+  const c = document.createElement("canvas");
+  c.width = c.height = 64;
+  const g = c.getContext("2d");
+  const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grad.addColorStop(0, "rgba(255, 255, 255, 1)");
+  grad.addColorStop(0.25, "rgba(255, 255, 255, 0.85)");
+  grad.addColorStop(1, "rgba(255, 255, 255, 0)");
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 64, 64);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+const BEACON_PERIOD_MS = 2200;
 
 function decode(b64, Type) {
   const bin = atob(b64);
@@ -215,7 +235,9 @@ function ringTexture(THREE) {
 
 // A text label that keeps the same size on screen.
 // `size` is the font size in CSS pixels; the canvas is drawn at 3x so it stays crisp.
-function textSprite(THREE, text, { color = "#cfe6ff", size = 13, weight = 600, opacity = 1 } = {}) {
+// `fov` is the camera's: on-screen size also scales with 1 / tan(fov / 2). Sizes were tuned
+// under the 80° sky camera, so that one is the reference.
+function textSprite(THREE, text, { color = "#cfe6ff", size = 13, weight = 600, opacity = 1, fov = 80 } = {}) {
   const k = 3;
   const c = document.createElement("canvas");
   const g = c.getContext("2d");
@@ -235,7 +257,7 @@ function textSprite(THREE, text, { color = "#cfe6ff", size = 13, weight = 600, o
     new THREE.SpriteMaterial({ map: t, transparent: true, depthWrite: false, sizeAttenuation: false, opacity })
   );
   // With sizeAttenuation off, a scale of 1 spans half the viewport height; keep CSS pixels instead.
-  const h = (2 * c.height) / k / window.innerHeight;
+  const h = ((2 * c.height) / k / window.innerHeight) * (Math.tan((fov / 2) * DEG) / Math.tan(40 * DEG));
   sprite.scale.set((h * c.width) / c.height, h, 1);
   sprite.renderOrder = 6;
   return sprite;
@@ -317,6 +339,10 @@ export default {
       .atmosphereAltitude(0.16)
       .pointOfView({ lat: 18, lng: 40, altitude: 2.6 });
     this.globe = globe;
+    this.rings = [];
+    // Beacons where events happened: they turn with the Earth, so they hang off the scene itself.
+    this.beacons = new THREE.Group();
+    globe.scene().add(this.beacons);
     globe.controls().autoRotate = false;
     globe.controls().enableDamping = true;
 
@@ -401,6 +427,7 @@ export default {
           uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
           uSizeScale: { value: this.sky ? SKY_SIZE_SCALE : 1 },
           uVisible: { value: keepVisible },
+          uFade: { value: this.replayState ? REPLAY_FADE : 1 },
           uSun: { value: this.sunTeme },
         },
         vertexShader: SAT_VERTEX,
@@ -433,6 +460,207 @@ export default {
 
     setClassVisible(index, visible) {
       if (this.satMaterial) this.satMaterial.uniforms.uVisible.value[index] = visible ? 1 : 0;
+    },
+
+    // --- Events --------------------------------------------------------------
+
+    async setEvents(rings) {
+      await this.ready;
+      this.rings = rings;
+      this.showRings();
+    },
+
+    // A glowing dot and two rings that spread and fade, flat on the ground at each event.
+    showRings() {
+      const THREE = this.THREE;
+      for (const obj of [...this.beacons.children]) {
+        this.beacons.remove(obj);
+        obj.traverse((o) => {
+          o.geometry?.dispose();
+          o.material?.dispose();
+        });
+      }
+      this.beacons.visible = !this.sky;
+      const active = this.replayState?.key;
+      this.glowTex = this.glowTex || glowTexture(THREE);
+      this.rings.forEach((r, k) => {
+        const big = r.key === active ? 1.8 : 1;
+        const color = new THREE.Color(r.color);
+        const beacon = new THREE.Group();
+        const pos = this.globe.getCoords(r.lat, r.lon, 0.004);
+        beacon.position.set(pos.x, pos.y, pos.z);
+        beacon.lookAt(pos.x * 2, pos.y * 2, pos.z * 2);
+        const dot = new THREE.Sprite(
+          new THREE.SpriteMaterial({ map: this.glowTex, color, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending })
+        );
+        dot.scale.set(2.2 * big, 2.2 * big, 1);
+        beacon.add(dot);
+        beacon.userData = { rings: [], phase: (k * 0.37) % 1, big };
+        for (let j = 0; j < 2; j++) {
+          const ring = new THREE.Mesh(
+            new THREE.RingGeometry(0.86, 1, 48),
+            new THREE.MeshBasicMaterial({ color, transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending })
+          );
+          ring.renderOrder = 5;
+          beacon.add(ring);
+          beacon.userData.rings.push(ring);
+        }
+        this.beacons.add(beacon);
+      });
+    },
+
+    updateBeacons() {
+      const now = performance.now() / BEACON_PERIOD_MS;
+      for (const b of this.beacons.children) {
+        const { rings, phase, big } = b.userData;
+        rings.forEach((ring, j) => {
+          const t = (now + phase + j / rings.length) % 1;
+          const r = (0.6 + 5.4 * t) * big;
+          ring.scale.set(r, r, 1);
+          ring.material.opacity = Math.pow(1 - t, 1.6) * 0.95;
+        });
+      }
+    },
+
+    // Both orbits, frozen against the Earth at the moment of the event, and a ghost that flies
+    // the old one into the burn and carries on along the new one.
+    async replay(p) {
+      await this.ready;
+      const THREE = this.THREE;
+      this.clearReplay();
+      if (this.selected >= 0) this.release(false);
+      const group = new THREE.Group();
+      const v = (a) => new THREE.Vector3(a[0], a[1], a[2]);
+      const before = p.before.map(v), after = p.after.map(v);
+      const color = new THREE.Color(p.color);
+      const tube = (pts, radius, mat) => {
+        const curve = new THREE.CatmullRomCurve3(pts, true);
+        const mesh = new THREE.Mesh(new THREE.TubeGeometry(curve, pts.length * 2, radius, 6, true), mat);
+        mesh.renderOrder = 7;
+        group.add(mesh);
+        return mesh;
+      };
+      const w = Math.max(p.radius / 106, 1);
+      const oldLine = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints(before),
+        new THREE.LineDashedMaterial({ color: "#a9bddc", dashSize: 1.2 * w, gapSize: 0.9 * w, transparent: true, opacity: 0.7, depthWrite: false })
+      );
+      oldLine.computeLineDistances();
+      oldLine.renderOrder = 7;
+      group.add(oldLine);
+      const glow = (opacity) =>
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false, blending: THREE.AdditiveBlending });
+      const newCore = tube(after, 0.22 * w, glow(0.95));
+      const newHalo = tube(after, 0.8 * w, glow(0.18));
+
+      const tex = glowTexture(THREE);
+      const sprite = (scale, opacity, tint = color) => {
+        const s = new THREE.Sprite(
+          new THREE.SpriteMaterial({ map: tex, color: tint, transparent: true, opacity, depthWrite: false, sizeAttenuation: false, blending: THREE.AdditiveBlending })
+        );
+        s.scale.set(scale, scale, 1);
+        s.renderOrder = 9;
+        group.add(s);
+        return s;
+      };
+      const fovK = Math.tan((this.globe.camera().fov / 2) * DEG); // keep sprites a steady size on screen
+      const ghost = sprite(0.022 * fovK, 1, new THREE.Color("#ffffff"));
+      const ghostHalo = sprite(0.06 * fovK, 0.55);
+      const burst = sprite(0.05 * fovK, 0);
+      burst.position.copy(before[0]);
+      const burnDot = sprite(0.02 * fovK, 0.9);
+      burnDot.position.copy(before[0]);
+
+      // `cx`, `cy`: which point of the label sits on the spot (0.5, -0.6 = centred above it).
+      const label = (text, at, color, size, cx, cy) => {
+        const s = textSprite(THREE, text, { color, size, fov: this.globe.camera().fov });
+        s.position.copy(at);
+        s.center.set(cx, cy);
+        s.renderOrder = 10;
+        s.material.depthTest = false; // text stays readable where it crosses the Earth's edge
+        group.add(s);
+      };
+      label(p.burn_label, before[0], "#ffffff", 12, 0.5, -0.7);
+      if (p.kind !== "decay") {
+        label("BEFORE", before[p.far], "#a9bddc", 11, 1.1, 0.5); // left of the spot
+        label("AFTER", after[p.far], p.color, 11, -0.1, 0.5); // right of it
+      }
+
+      this.scene().add(group);
+      this.replayState = {
+        key: p.key, group, before, after, ghost, ghostHalo, burst, newCore, newHalo, fovK,
+        start: performance.now(), lastPhase: 0, decay: p.kind === "decay",
+      };
+      if (this.satMaterial) this.satMaterial.uniforms.uFade.value = REPLAY_FADE;
+      this.showRings();
+
+      // High orbits: a three-quarter view from above the plane, towards where the orbits part most.
+      // Low ones hug the Earth and would hide behind its edge from above, so look from the side:
+      // both orbits cross the Earth's face and spread apart from the burn towards the far side.
+      const n = v(p.normal).normalize();
+      const far = before[p.far].clone().normalize();
+      let dir, altitude;
+      if (p.radius > 2 * R) {
+        dir = n.multiplyScalar(0.72).add(far.multiplyScalar(0.7)).normalize();
+        altitude = (p.radius * 2.9) / R - 1;
+      } else {
+        const side = new THREE.Vector3().crossVectors(n, far).normalize();
+        dir = n.multiplyScalar(0.36).add(side.multiplyScalar(0.93)).normalize();
+        altitude = 2.9;
+      }
+      const geo = this.globe.toGeoCoords(dir.multiplyScalar(R * 2));
+      const controls = this.globe.controls();
+      controls.enableRotate = true;
+      controls.enableDamping = true;
+      this.globe.pointOfView({ lat: geo.lat, lng: geo.lng, altitude }, 1800);
+    },
+
+    clearReplay() {
+      const r = this.replayState;
+      if (!r) return;
+      this.scene().remove(r.group);
+      r.group.traverse((o) => {
+        o.geometry?.dispose();
+        o.material?.map?.dispose();
+        o.material?.dispose();
+      });
+      this.replayState = null;
+    },
+
+    endReplay() {
+      if (!this.replayState) return;
+      this.clearReplay();
+      if (this.satMaterial) this.satMaterial.uniforms.uFade.value = 1;
+      this.showRings();
+      const pov = this.globe.pointOfView();
+      this.globe.pointOfView({ lat: pov.lat, lng: pov.lng, altitude: 2.6 }, 1400);
+    },
+
+    scene() {
+      return this.globe.scene();
+    },
+
+    updateReplay() {
+      const r = this.replayState;
+      const s = ((performance.now() - r.start) % REPLAY_CYCLE_MS) / REPLAY_CYCLE_MS;
+      const along = (pts, f) => {
+        const x = f * (pts.length - 1), i = Math.min(Math.floor(x), pts.length - 2);
+        return pts[i].clone().lerp(pts[i + 1], x - i);
+      };
+      const onNew = s >= 0.5 && !r.decay;
+      const p = onNew ? along(r.after, s - 0.5) : along(r.before, r.decay ? s : 0.5 + s);
+      r.ghost.position.copy(p);
+      r.ghostHalo.position.copy(p);
+      // The new orbit lights up once the ghost is on it.
+      const lit = onNew ? 1 : 0.45;
+      r.newCore.material.opacity += (0.9 * lit - r.newCore.material.opacity) * 0.08;
+      r.newHalo.material.opacity += (0.16 * lit - r.newHalo.material.opacity) * 0.08;
+      if (s >= 0.5 && r.lastPhase < 0.5) r.burstAt = performance.now();
+      r.lastPhase = s;
+      const age = r.burstAt ? (performance.now() - r.burstAt) / 1100 : 1;
+      r.burst.material.opacity = age < 1 ? Math.pow(1 - age, 1.5) : 0;
+      const k = (0.04 + 0.22 * Math.min(age, 1)) * r.fovK;
+      r.burst.scale.set(k, k, 1);
     },
 
     async select(noradId, trail) {
@@ -516,7 +744,7 @@ export default {
       }
     },
 
-    release() {
+    release(moveCamera = true) {
       this.selected = -1;
       this.following = false;
       this.marker.visible = false;
@@ -529,6 +757,7 @@ export default {
       const controls = this.globe.controls();
       controls.enableRotate = true;
       controls.enableDamping = true;
+      if (!moveCamera) return;
       const pov = this.globe.pointOfView();
       this.globe.pointOfView({ lat: pov.lat, lng: pov.lng, altitude: 2.6 }, 1200);
     },
@@ -614,6 +843,8 @@ export default {
         }
       }
       if (this.sky) this.updateSky();
+      if (this.replayState) this.updateReplay();
+      if (this.beacons.visible && this.beacons.children.length) this.updateBeacons();
     },
 
     // --- Your sky ----------------------------------------------------------
@@ -755,6 +986,7 @@ export default {
       this.satMaterial.uniforms.uSizeScale.value = SKY_SIZE_SCALE;
       if (!this.dome) this.buildDome();
       this.dome.visible = true;
+      this.showRings();
       const southward = this.obs.lat >= 0 ? 180 : 0;
       this.sky = { az: southward, el: 35, dir: this.skyDir(35, southward), track: this.selected >= 0 };
       this.updateSky();
@@ -767,6 +999,7 @@ export default {
       const controls = this.globe.controls();
       this.sky = null;
       this.dome.visible = false;
+      this.showRings();
       camera.fov = this.saved.fov;
       camera.near = this.saved.near;
       camera.up.copy(this.saved.up);

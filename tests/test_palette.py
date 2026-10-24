@@ -35,7 +35,7 @@ def test_empty_query_offers_featured_satellites_and_views(catalog):
         ("+2d", "shift", 2 * 86400),
         ("tomorrow", "shift", 86400),
         ("stop following", "release", None),
-        ("maneuvers this week", "soon", None),
+        ("maneuvers this week", "events", None),
         ("surprise me", "surprise", None),
     ],
 )

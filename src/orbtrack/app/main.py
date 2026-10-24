@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 from nicegui import app, run, ui
 
-from orbtrack.app import frames, jobs, palette
+from orbtrack.app import events, frames, jobs, palette
 from orbtrack.app.clock import WINDOW_S, SimClock
 from orbtrack.app.globe import STATIC_DIR, Globe, Timebar
 from orbtrack.app.jobs import state
@@ -21,6 +21,8 @@ HEARTBEAT_S = 0.2  # how often the page checks whether it owes the browser a new
 SKY_PERIOD_S = 2.0
 BANDS_PERIOD_S = 1800.0
 HISTORY_DAYS = 90  # how far back the altitude sparkline on the card looks
+EVENT_DAYS = 30  # how far back the events panel looks
+EVENTS_PERIOD_S = 5.0
 
 CLASS_COLORS = ["#38e1ff", "#9b8cff", "#ffc24b", "#ff5fa2", "#9dff6a"]  # matches globe.js
 CLASS_LABELS = {"LEO": "Low Earth", "STARLINK": "Starlink", "MEO": "Medium Earth", "GEO": "Geostationary", "HEO": "Highly elliptical"}
@@ -51,7 +53,8 @@ def local_hm(ms: float) -> str:
 @ui.page("/")
 def index() -> None:
     catalog: Catalog = state["catalog"]
-    loaded = {"version": state["version"]}  # which catalog refresh this page is showing
+    # which catalog refresh and which detection run this page is showing
+    loaded = {"version": state["version"], "events": None}
     ts = catalog.ts
     observer = home_observer()
     observer_frame = frames.observer_frame(observer)
@@ -66,6 +69,7 @@ def index() -> None:
     push = {"ready": False, "dirty": True, "busy": False, "last": 0.0}
     sky = {"passes": [], "from": None, "ids": (), "busy": False}
     visible = [True] * len(frames.ORBIT_CLASSES)
+    ev: dict = {"items": [], "demo": False, "replay": None, "busy": False}
 
     def sim_time():
         return ts.from_datetime(datetime.fromtimestamp(clock.now(), tz=UTC))
@@ -93,7 +97,8 @@ def index() -> None:
 
     # Legend with per-class toggles, and quick targets
     legend_rows, count_labels = [], {}
-    with div("glass legend") as legend:
+    rightcol = div("rightcol")
+    with rightcol, div("glass legend"):
         div("title", "ORBITS")
         for index, name in enumerate(frames.ORBIT_CLASSES):
             with div("legend-row") as row:
@@ -111,6 +116,25 @@ def index() -> None:
                 if catalog.get(norad_id):
                     target_buttons[norad_id] = div("target", label).on("click", lambda _, n=norad_id: select(n))
             div("target", "SURPRISE ME").on("click", lambda: surprise())
+
+    # Detected events: a 30-day strip and a list; click one to replay it
+    with rightcol, div("glass events") as events_panel:
+        with div("ev-head"):
+            div("title", f"EVENTS · {EVENT_DAYS} DAYS")
+            demo_badge = div("badge gone", "DEMO")
+        strip = ui.html("", sanitize=False).classes("ev-strip")
+        ev_list = div("ev-list")
+
+    # Replay caption, above the time machine bar
+    with div("glass replaybar gone") as replaybar:
+        with div("rb-main"):
+            rb_kicker = div("rb-kicker", "REPLAY")
+            rb_title = div("rb-title", "")
+            rb_reason = div("rb-reason", "")
+        with div("rb-side"):
+            ui.html('<span class="rb-key"><i class="old"></i>before <i class="new"></i>after</span>', sanitize=False)
+            rb_scale = div("rb-scale", "")
+            div("rb-close", "ESC · CLOSE").on("click", lambda: end_replay())
 
     # Your sky panel, in place of the legend while looking up
     with div("glass skypanel gone") as skypanel:
@@ -218,6 +242,7 @@ def index() -> None:
         sat = catalog.get(int(norad_id))
         if sat is None:
             return
+        end_replay()
         selected.update({"sat": sat, "pass": None, "pass_from": None})
         t = sim_time()
         globe.select(sat.norad_id, frames.trail(sat, t))
@@ -234,6 +259,112 @@ def index() -> None:
         await show_history(sat)
         if view["mode"] == "sky":
             await refresh_sky(force=True)
+
+    # --- Events -----------------------------------------------------------------
+
+    def event_label(item: dict) -> str:
+        return short_name(item["norad_id"], item["name"] or str(item["norad_id"]))
+
+    async def load_events(force: bool = False) -> None:
+        """Pick up a new detection run (or the demo switch) and redraw everything that shows events."""
+        if ev["busy"] or not (force or loaded["events"] != state["events_version"]):
+            return
+        ev["busy"] = True
+        try:
+            version = state["events_version"]
+            items = await run.io_bound(events.load, jobs.store(), EVENT_DAYS)
+            if items is None:
+                return
+            if not items and ev["demo"] and state["records"]:
+                items = await run.io_bound(events.demo, state["records"])
+                if items is None:
+                    return
+            loaded["events"] = version
+        finally:
+            ev["busy"] = False
+        ev["items"] = items
+        render_events()
+        globe.set_events([{k: e[k] for k in ("lat", "lon", "color", "key")} for e in items])
+        timebar.set_events([
+            {"ms": e["ms"], "color": e["color"],
+             "label": f"{event_label(e)} {e['kind']} {events.size_text(e)}" + (" (demo)" if e["demo"] else "")}
+            for e in items
+        ])
+
+    def render_events() -> None:
+        items, now = ev["items"], datetime.now(UTC)
+        demo = any(e["demo"] for e in items)
+        demo_badge.classes(remove="gone") if demo else demo_badge.classes(add="gone")
+        strip.content = events.strip_svg(items, now, EVENT_DAYS)
+        ev_list.clear()
+        with ev_list:
+            if not items:
+                div("ev-empty", "No maneuvers found yet. The detector needs a few days of orbit history, "
+                                "which builds up while OrbTrack runs.")
+                div("ev-button", "SHOW DEMO EVENTS").on("click", lambda: set_demo(True))
+                return
+            for e in items:
+                active = " active" if e["key"] == ev["replay"] else ""
+                with div("ev-row" + active).on("click", lambda _, k=e["key"]: start_replay(k)):
+                    ui.element("div").classes("ev-dot").style(f"background:{e['color']};box-shadow:0 0 10px {e['color']}")
+                    with div("ev-text"):
+                        div("ev-name", event_label(e))
+                        div("ev-kind", e["kind"].upper())
+                    with div("ev-nums"):
+                        div("ev-size", events.size_text(e)).style(f"color:{e['color']}")
+                        div("ev-ago", events.ago_text(e["burn_at"], now))
+            if demo:
+                div("ev-button quiet", "HIDE DEMO").on("click", lambda: set_demo(False))
+
+    async def set_demo(on: bool) -> None:
+        ev["demo"] = on
+        if not on and ev["replay"] and any(e["demo"] for e in ev["items"]):
+            end_replay()
+        await load_events(force=True)
+
+    async def start_replay(key: str) -> None:
+        item = next((e for e in ev["items"] if e["key"] == key), None)
+        if item is None:
+            return
+        payload = await run.io_bound(events.replay, item)
+        if payload is None:
+            return
+        if view["mode"] == "sky":
+            await set_view("globe")
+        if selected["sat"] is not None:
+            release(move_camera=False)
+        ev["replay"] = key
+        rightcol.classes(remove="sheet")
+        globe.replay(payload)
+        rb_kicker.text = "REPLAY · DEMO EVENT" if item["demo"] else "REPLAY"
+        rb_title.text = f"{event_label(item)} · {item['kind'].upper()} {events.size_text(item)}"
+        rb_reason.text = item["reason"]
+        rb_scale.text = "" if payload["scale"] <= 1 else f"GAP DRAWN ×{payload['scale']:,}"
+        replaybar.style(f"--kind:{item['color']}")
+        replaybar.classes(remove="gone")
+        render_events()
+
+    def end_replay() -> None:
+        if ev["replay"] is None:
+            return
+        ev["replay"] = None
+        globe.end_replay()
+        replaybar.classes(add="gone")
+        render_events()
+
+    async def show_events() -> None:
+        if view["mode"] == "sky":
+            await set_view("globe")
+        if not ev["items"] and not ev["demo"]:
+            ui.notify("No maneuvers detected yet: showing demo events until history builds up.", type="info")
+            await set_demo(True)
+        events_panel.classes(add="flash")
+        rightcol.classes(add="sheet")  # phones: the list opens as a sheet over the globe
+        ui.timer(1.2, lambda: events_panel.classes(remove="flash"), once=True)
+
+    async def events_timer() -> None:
+        if push["ready"]:
+            await load_events()
 
     async def show_history(sat) -> None:
         """The altitude sparkline, from whatever history the local store holds for this satellite."""
@@ -272,9 +403,10 @@ def index() -> None:
     async def surprise() -> None:
         await select(random.choice(list(catalog)).norad_id)
 
-    def release() -> None:
+    def release(move_camera: bool = True) -> None:
         selected.update({"sat": None, "pass": None, "pass_from": None})
-        globe.release()
+        if move_camera:
+            globe.release()
         card.classes(add="hidden")
         for button in target_buttons.values():
             button.classes(remove="active")
@@ -286,15 +418,16 @@ def index() -> None:
         for key, button in view_buttons.items():
             button.classes(add="active") if key == mode else button.classes(remove="active")
         if mode == "sky":
+            end_replay()
             globe.enter_sky(observer_frame)
-            legend.classes(add="gone")
+            rightcol.classes(add="gone")
             skypanel.classes(remove="gone")
             kicker.text = "TRACKING IN YOUR SKY"
             await refresh_sky(force=True)
         else:
             globe.exit_sky()
             skypanel.classes(add="gone")
-            legend.classes(remove="gone")
+            rightcol.classes(remove="gone")
             kicker.text = "FOLLOWING"
 
     def watched_ids() -> tuple[int, ...]:
@@ -416,6 +549,7 @@ def index() -> None:
         log.warning("OrbTrack: first frame with satellites at %s ms after page load", e.args["ms"])
         # The slower extras wait until the globe is up, so they never hold up the first frame.
         push_bands()
+        await load_events(force=True)
         await refresh_sky(force=True)
 
     # Time machine controls
@@ -448,7 +582,9 @@ def index() -> None:
                 row.on("click", lambda _, c=cmd: run_command(c))
 
     def refresh_palette(query: str) -> None:
-        pal["items"] = palette.suggest(query or "", catalog)
+        brief = [{"label": event_label(e), "kind": e["kind"], "size": events.size_text(e), "ms": e["ms"],
+                  "key": e["key"], "norad_id": e["norad_id"], "demo": e["demo"]} for e in ev["items"]]
+        pal["items"] = palette.suggest(query or "", catalog, events=brief, now_s=time.time())
         pal["index"] = 0
         render_results()
 
@@ -500,6 +636,10 @@ def index() -> None:
                 release()
             case "surprise":
                 await surprise()
+            case "events":
+                await show_events()
+            case "replay":
+                await start_replay(cmd.arg)
             case "soon":
                 ui.notify(f"{cmd.label}: {cmd.hint}.", type="info")
 
@@ -523,8 +663,11 @@ def index() -> None:
         elif key == "view":
             await set_view("globe" if view["mode"] == "sky" else "sky")
         elif key == "escape":
+            rightcol.classes(remove="sheet")  # the phone events sheet, if it is open
             if pal["open"]:
                 close_palette()
+            elif ev["replay"] is not None:
+                end_replay()
             elif selected["sat"] is not None:
                 release()
             elif view["mode"] == "sky":
@@ -566,6 +709,7 @@ def index() -> None:
     ui.timer(0.5, tick)
     ui.timer(SKY_PERIOD_S, sky_timer)
     ui.timer(BANDS_PERIOD_S, push_bands)
+    ui.timer(EVENTS_PERIOD_S, events_timer)
 
 
 def serve(group: str = "active", port: int = 8080, show: bool = True) -> None:

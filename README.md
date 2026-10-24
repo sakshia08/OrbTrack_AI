@@ -56,6 +56,8 @@ uv run orbtrack events detect     # run it over the watchlist now
 uv run orbtrack events train      # retrain (about 5 s) and print the evaluation report
 ```
 
+In the app, events show as pulsing beacons on the globe, marks on the time machine bar and a list under the legend. Click one (or type "maneuvers this week" or "events ISS" in Ctrl+K) to replay it: the orbit before the event and after it, rebuilt from the stored element sets, with a ghost satellite flying into the burn. A 1.5 km reboost is invisible at globe scale, so the gap between the two orbits is drawn larger, and the replay says by how much. Until the detector has found something, "Show demo events" plays a few made-up but realistic ones, marked DEMO everywhere.
+
 ## Layout
 
 | Path | What |
@@ -73,6 +75,7 @@ uv run orbtrack events train      # retrain (about 5 s) and print the evaluation
 | `src/orbtrack/app/main.py` | The web page: globe, HUD, palette, your-sky panel, timers that push data to the browser |
 | `src/orbtrack/app/frames.py` | Positions, trails, Sun, passes and sky geometry, packed for the browser |
 | `src/orbtrack/app/jobs.py` | Background jobs (APScheduler): catalog refresh, history snapshots, nightly sync, detection |
+| `src/orbtrack/app/events.py` | Events for the page: where they happened, before/after replays, demo events |
 | `src/orbtrack/app/sparkline.py` | Altitude-history sparkline for the follow card |
 | `src/orbtrack/app/clock.py` | The time machine: a simulated clock with rates, pause and jumps |
 | `src/orbtrack/app/palette.py` | Ctrl+K command palette: keywords to actions, no LLM |

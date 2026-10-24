@@ -207,6 +207,27 @@ class HistoryStore:
         out["source"] = np.array(cols[-1])
         return out
 
+    def element_sets(self, norad_id: int, epochs: Iterable[datetime]) -> dict[datetime, dict]:
+        """Stored element sets at these epochs, as OMM records SGP4 can be started from."""
+        wanted = [e.replace(tzinfo=None) for e in epochs]
+        with self._connect() as con:
+            cur = con.execute(
+                "SELECT * FROM elements WHERE norad_id = ? AND epoch IN (SELECT unnest(?))", [int(norad_id), wanted]
+            )
+            names = [d[0] for d in cur.description]
+            rows = [dict(zip(names, row, strict=True)) for row in cur.fetchall()]
+        out = {}
+        for row in rows:
+            omm = {key: row[col] for key, col in NUMERIC.items()}
+            omm.update({
+                "OBJECT_NAME": row["name"] or str(row["norad_id"]),
+                "NORAD_CAT_ID": row["norad_id"],
+                "EPOCH": row["epoch"].strftime("%Y-%m-%dT%H:%M:%S.%f"),
+                "ELEMENT_SET_NO": row["element_set_no"] or 999,
+            })
+            out[row["epoch"]] = omm
+        return out
+
     def names(self, norad_ids: Iterable[int]) -> dict[int, str]:
         """The most recent name each satellite was published under."""
         ids = [int(n) for n in norad_ids]

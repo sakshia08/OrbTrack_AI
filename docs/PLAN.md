@@ -69,7 +69,8 @@ Split into three parts, each committed and pushed on its own.
 
 ### 4c · Events on the globe
 
-- [ ] Pulsing rings where maneuvers and decays happened
-- [ ] Events list and timeline marks; click one to replay it with the orbit before and after
-- [ ] Palette: "maneuvers this week", "events ISS"
-- [ ] Gate: click an ISS reboost and watch it replay
+- [x] Pulsing rings where maneuvers and decays happened
+- [x] Events list and timeline marks; click one to replay it with the orbit before and after
+- [x] Palette: "maneuvers this week", "events ISS"
+- [x] Demo events (clearly marked) until real history has built up
+- [x] Gate: click an ISS reboost and watch it replay (checked with the demo reboost; a real one needs history first)

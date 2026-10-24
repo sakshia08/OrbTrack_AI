@@ -70,3 +70,26 @@ A plain-language record of what each phase built. The plan for upcoming phases i
 - **Measured:** on 300 simulated satellites it never saw in training, it found 93% of burns, and 96% of what it flagged was real. That passes the gate (80% / 70%). A plain threshold on the same data gets 56% precision. Real-world numbers will be lower until it is checked on real ISS reboosts. docs/DETECTOR.md explains it all.
 - **New commands:** `orbtrack events` (also `events ISS`, `--days 90`), `events detect`, `events train`, `events evaluate`.
 - **Tests:** 12 new offline tests: a step that sticks versus a spike that snaps back, steady decay is not an event, raise, lower and plane change named correctly, rare false alarms on quiet history, the gate on an unseen fleet, the saved model reloads, and events are stored and replaced on rerun. 92 tests in total, all passing.
+
+## Phase 4c · Events on the globe
+
+- **Events you can see:** every maneuver the detector finds shows up in three places:
+  - as a glowing beacon with rings spreading out on the globe, at the spot on Earth the satellite was over
+  - as a diamond on the time machine bar
+  - in a new events panel under the legend, with a 30-day strip and a list (satellite, kind, size, how long ago)
+- **Replay:** click an event to watch it happen.
+  - The camera flies to the orbit, and the orbit before (dashed) and after (glowing) are rebuilt from the stored element sets, frozen against the Earth as it was at that moment.
+  - A ghost satellite flies the old orbit into the burn, flashes, and carries on along the new one as the two orbits part.
+  - A banner says what happened, and Esc closes it.
+- **Honest scale:** a 1.6 km ISS reboost is invisible on a globe this size, so the gap between the two orbits is drawn larger, and the banner says by how much ("GAP DRAWN ×100").
+  - Low orbits are shown from the side, where you can see them separate across the Earth's face.
+  - Geostationary ones are shown from above, as a big ring around a small Earth.
+- **Command palette:** "maneuvers this week" lists the week's events, and "events ISS" (or any satellite) lists that satellite's events. Pick one to replay it.
+- **Demo events until there is history:** the detector needs days of history before it can find anything. Meanwhile, "Show demo events" plays five made-up but realistic events on real watchlist satellites: an ISS reboost, GOES 18 station-keeping, a Landsat 9 plane trim, a Tiangong reboost and a NOAA 20 drag make-up. They are marked DEMO on the panel, the list, the palette and the banner, and are never saved.
+- **On phones:** the events list opens as a sheet from the palette, and the replay banner sits above the time bar.
+- **Fixed along the way:** labels in 3D now account for the camera's field of view, so they are the same size in the globe and sky views.
+- **Tests:**
+  - 12 new tests: stored element sets rebuild the exact orbit, a demo burn keeps the satellite in place and raises the far side by twice the change, a plane change tilts the orbit at the node, replays meet at the burn and part most half an orbit later, demo events are marked, and the palette lists the right events.
+  - One of them caught a real bug: comparing orbits at the same time breaks when two element sets disagree on where the satellite is along its orbit, so replays now compare them at the same angle.
+  - 104 tests in total, all passing.
+- **Screenshots** of the events panel, the replays, the palette and the phone layout are in `docs/screenshots/phase-4/`, with a short guide.

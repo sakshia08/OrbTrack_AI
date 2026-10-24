@@ -29,7 +29,7 @@ NIGHTLY_HOUR = 3  # local time
 
 # The live catalog shared by every page. `version` goes up on each refresh so pages can notice.
 state: dict = {"catalog": None, "records": None, "group": "active", "version": 0, "store": None,
-                "detector": None}
+                "detector": None, "events_version": 0}
 
 
 def load_catalog() -> None:
@@ -55,6 +55,7 @@ def find_events() -> list:
 
 async def detect_events() -> None:
     events = await run.io_bound(find_events)
+    state["events_version"] += 1  # pages reload their event list
     if events is not None:
         log.warning("OrbTrack events: %d maneuvers and decays in the watchlist's history", len(events))
 

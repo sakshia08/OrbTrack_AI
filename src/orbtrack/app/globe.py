@@ -41,6 +41,15 @@ class Globe(ui.element, component="globe.js"):
     def look_at(self, azimuth_deg: float, elevation_deg: float) -> None:
         self.run_method("lookAt", azimuth_deg, elevation_deg)
 
+    def set_events(self, rings: list[dict]) -> None:
+        self.run_method("setEvents", rings)
+
+    def replay(self, payload: dict) -> None:
+        self.run_method("replay", payload)
+
+    def end_replay(self) -> None:
+        self.run_method("endReplay")
+
 
 class Timebar(ui.element, component="timebar.js"):
     """The time machine bar along the bottom."""
@@ -53,3 +62,6 @@ class Timebar(ui.element, component="timebar.js"):
 
     def set_passes(self, passes: list[dict]) -> None:
         self.run_method("setPasses", passes)
+
+    def set_events(self, events: list[dict]) -> None:
+        self.run_method("setEvents", events)

@@ -1,5 +1,5 @@
 // Time machine bar: the simulated clock, speed controls and a ±48 h scrub track that shows
-// day and night over your city and upcoming passes. The clock animates locally from the
+// day and night over your city, upcoming passes and detected events. The clock animates locally from the
 // line the server sends (sim = sim0 + (real - real0) * rate); scrubbing emits new times.
 
 const WINDOW_MS = 48 * 3600 * 1000;
@@ -68,6 +68,7 @@ export default {
     this.skew = 0;
     this.bands = null;
     this.passes = [];
+    this.events = [];
     this.drag = null;
     this.lastDraw = 0;
     this.lastEmit = 0;
@@ -97,6 +98,11 @@ export default {
 
     setPasses(passes) {
       this.passes = passes;
+      this.draw();
+    },
+
+    setEvents(events) {
+      this.events = events;
       this.draw();
     },
 
@@ -190,6 +196,26 @@ export default {
         g.fillRect(a, h - 11, b - a, 4);
       }
 
+      // Events: a small glowing diamond along the top edge.
+      for (const ev of this.events) {
+        const px = x(ev.ms);
+        if (px < -4 || px > w + 4) continue;
+        g.save();
+        g.shadowColor = ev.color;
+        g.shadowBlur = 8;
+        g.fillStyle = ev.color;
+        g.beginPath();
+        g.moveTo(px, 3);
+        g.lineTo(px + 4, 7.5);
+        g.lineTo(px, 12);
+        g.lineTo(px - 4, 7.5);
+        g.closePath();
+        g.fill();
+        g.restore();
+        g.fillStyle = ev.color.length === 7 ? `${ev.color}55` : ev.color;
+        g.fillRect(px - 0.5, 12, 1, h - 12);
+      }
+
       const now = x(this.real());
       g.fillStyle = "rgba(255, 77, 109, 0.9)";
       g.fillRect(now - 0.5, 0, 1.5, h);
@@ -215,9 +241,11 @@ export default {
         const rect = track.getBoundingClientRect();
         const d = new Date(sim);
         const pass = this.passes.find((p) => sim >= p.rise_ms - 5 * 60000 && sim <= p.set_ms + 5 * 60000);
+        const slack = (2 * WINDOW_MS * 6) / rect.width; // within 6 px of a mark
+        const ev = this.events.find((e) => Math.abs(sim - e.ms) <= slack);
         hover.textContent =
           `${DAYS[d.getDay()]} ${pad(d.getHours())}:${pad(d.getMinutes())}` +
-          (pass ? ` · ${pass.label} pass${pass.visible ? " ✦ visible" : ""}` : "");
+          (ev ? ` · ${ev.label}` : pass ? ` · ${pass.label} pass${pass.visible ? " ✦ visible" : ""}` : "");
         hover.style.left = `${e.clientX - rect.left}px`;
         hover.style.opacity = 1;
         if (!this.drag) return;
