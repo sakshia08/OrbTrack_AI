@@ -42,3 +42,33 @@ The order follows the fun: the globe and HUD come first because they are the rew
 - [x] "Your sky": camera at your city looking up, sky dome with compass, day/twilight/night sky, pass arcs; click a pass to watch it
 - [x] Satellites in Earth's shadow dim; comet trail stays glued to the satellite at any speed
 - [ ] A friend says "whoa", unprompted
+
+## Phase 4 · History & detection
+
+Split into three parts, each committed and pushed on its own.
+
+### 4a · History store
+
+- [x] Space-Track client: login, `gp_history` and `decay` queries, polite rate limiting, credentials from a git-ignored `.env`
+- [x] DuckDB history store (one file, deduplicated by satellite + epoch) with Parquet export
+- [x] CelesTrak snapshots of the watchlist saved every time the catalog refreshes, so history grows even without Space-Track
+- [x] APScheduler jobs inside the app: catalog refresh every 2 h (live, no restart) and a nightly Space-Track sync
+- [x] `orbtrack history sync | status | show <sat>` commands
+- [x] Altitude-history sparkline on the follow card
+- [x] Gate: history store fills from CelesTrak snapshots, a second sync adds nothing new, tests run offline
+- [ ] Later (optional): connect a Space-Track login and backfill a year of watchlist history
+
+### 4b · Detector
+
+- [ ] Features from consecutive element sets (changes in mean motion, inclination, eccentricity, drag), per-satellite baselines
+- [ ] Labelled set: ISS reboosts, GEO station-keeping, hand-labelled events
+- [ ] scikit-learn model with an evaluation report; nightly detection job writes events to DuckDB
+- [ ] `orbtrack events` command
+- [ ] Gate: recall ≥ 80% at precision ≥ 70% on the labelled set
+
+### 4c · Events on the globe
+
+- [ ] Pulsing rings where maneuvers and decays happened
+- [ ] Events list and timeline marks; click one to replay it with the orbit before and after
+- [ ] Palette: "maneuvers this week", "events ISS"
+- [ ] Gate: click an ISS reboost and watch it replay

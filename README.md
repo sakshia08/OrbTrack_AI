@@ -27,16 +27,40 @@ uv run pytest                      # offline test suite
 
 Set your location with `ORBTRACK_HOME="lat,lon,elevation_m"` (default: Bangalore), or pass `--lat/--lon` to `passes`. Downloads are cached in `~/.cache/orbtrack` (override with `ORBTRACK_CACHE`); CelesTrak data is refreshed at most every 2 hours.
 
+### Orbit history
+
+OrbTrack keeps every orbit it sees in a local DuckDB file (`~/.local/share/orbtrack/history.duckdb`, override with `ORBTRACK_DATA`). For the satellites on the watchlist, the app saves CelesTrak's latest orbits every 2 hours, so history keeps growing (only a few MB a year). CelesTrak only knows each satellite's current orbit, so with a free [Space-Track.org](https://www.space-track.org) account OrbTrack also downloads a year of past orbits for the watchlist, then tops it up every night. The maneuver detector needs that past to learn from.
+
+Put your login in a `.env` file in the repo folder (it is git-ignored):
+
+```
+SPACETRACK_IDENTITY=you@example.com
+SPACETRACK_PASSWORD=your-password
+```
+
+```bash
+uv run orbtrack history sync           # CelesTrak snapshot + Space-Track (a year the first time, then only what is new)
+uv run orbtrack history status         # what is stored
+uv run orbtrack history show ISS       # element sets for the last 30 days, with reboosts marked
+uv run orbtrack history watch NOAA 20  # add a satellite to the Space-Track watchlist
+uv run orbtrack history export out/    # Parquet files, one folder per year
+```
+
 ## Layout
 
 | Path | What |
 | --- | --- |
 | `src/orbtrack/data/celestrak.py` | CelesTrak GP client (OMM JSON), cached on disk |
+| `src/orbtrack/data/spacetrack.py` | Space-Track client (`gp_history`, `decay`), rate-limited |
+| `src/orbtrack/data/history.py` | DuckDB orbit history store, Parquet export |
+| `src/orbtrack/data/sync.py` | CelesTrak snapshots and Space-Track backfill into the store |
 | `src/orbtrack/engine/catalog.py` | Satellite catalog, name/NORAD lookup, orbit classes |
 | `src/orbtrack/engine/propagate.py` | Vectorised SGP4 for the whole catalog, ground tracks |
 | `src/orbtrack/engine/passes.py` | Passes over an observer, naked-eye visibility |
 | `src/orbtrack/app/main.py` | The web page: globe, HUD, palette, your-sky panel, timers that push data to the browser |
 | `src/orbtrack/app/frames.py` | Positions, trails, Sun, passes and sky geometry, packed for the browser |
+| `src/orbtrack/app/jobs.py` | Background jobs (APScheduler): catalog refresh, history snapshots, nightly sync |
+| `src/orbtrack/app/sparkline.py` | Altitude-history sparkline for the follow card |
 | `src/orbtrack/app/clock.py` | The time machine: a simulated clock with rates, pause and jumps |
 | `src/orbtrack/app/palette.py` | Ctrl+K command palette: keywords to actions, no LLM |
 | `src/orbtrack/app/globe.js` | The globe component: Earth shader, satellite point cloud, follow cam, your-sky view |

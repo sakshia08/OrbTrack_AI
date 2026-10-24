@@ -185,6 +185,7 @@ const SKY_FRAGMENT = `
 
 const OMEGA_EARTH = 7.2921158553e-5; // rad/s, sidereal
 const DEG = Math.PI / 180;
+const SKY_SIZE_SCALE = 0.06; // satellites are much closer to the camera when looking up from the ground
 
 function decode(b64, Type) {
   const bin = atob(b64);
@@ -355,9 +356,18 @@ export default {
       this.$emit("ready");
     },
 
+    // Called again whenever the server refreshes the catalog (every 2 h); the old swarm is replaced.
     async initCatalog(payload) {
       await this.ready;
       const THREE = this.THREE;
+      const keepVisible = this.satMaterial ? [...this.satMaterial.uniforms.uVisible.value] : [1, 1, 1, 1, 1];
+      if (this.points) {
+        this.orbitFrame.remove(this.points);
+        this.points.geometry.dispose();
+        this.satMaterial.dispose();
+        this.points = null;
+        this.frame = null; // wait for a frame that matches the new catalog
+      }
       const n = payload.count;
       this.count = n;
       this.ids = decode(payload.ids, Int32Array);
@@ -389,8 +399,8 @@ export default {
         uniforms: {
           uT: { value: 0 },
           uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
-          uSizeScale: { value: 1 },
-          uVisible: { value: [1, 1, 1, 1, 1] },
+          uSizeScale: { value: this.sky ? SKY_SIZE_SCALE : 1 },
+          uVisible: { value: keepVisible },
           uSun: { value: this.sunTeme },
         },
         vertexShader: SAT_VERTEX,
@@ -742,7 +752,7 @@ export default {
       camera.up.set(...this.obs.up);
       camera.updateProjectionMatrix();
       this.globe.showAtmosphere(false);
-      this.satMaterial.uniforms.uSizeScale.value = 0.06;
+      this.satMaterial.uniforms.uSizeScale.value = SKY_SIZE_SCALE;
       if (!this.dome) this.buildDome();
       this.dome.visible = true;
       const southward = this.obs.lat >= 0 ? 180 : 0;

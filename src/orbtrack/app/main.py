@@ -3,13 +3,15 @@
 import logging
 import random
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from nicegui import app, run, ui
 
-from orbtrack.app import frames, palette
+from orbtrack.app import frames, jobs, palette
 from orbtrack.app.clock import WINDOW_S, SimClock
 from orbtrack.app.globe import STATIC_DIR, Globe, Timebar
+from orbtrack.app.jobs import state
+from orbtrack.app.sparkline import altitude_sparkline, sparkline_caption
 from orbtrack.config import home_observer
 from orbtrack.engine import Catalog
 
@@ -18,6 +20,7 @@ log = logging.getLogger("orbtrack")
 HEARTBEAT_S = 0.2  # how often the page checks whether it owes the browser a new frame
 SKY_PERIOD_S = 2.0
 BANDS_PERIOD_S = 1800.0
+HISTORY_DAYS = 90  # how far back the altitude sparkline on the card looks
 
 CLASS_COLORS = ["#38e1ff", "#9b8cff", "#ffc24b", "#ff5fa2", "#9dff6a"]  # matches globe.js
 CLASS_LABELS = {"LEO": "Low Earth", "STARLINK": "Starlink", "MEO": "Medium Earth", "GEO": "Geostationary", "HEO": "Highly elliptical"}
@@ -29,14 +32,6 @@ FONTS = (
     '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700'
     '&family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">'
 )
-
-state: dict = {"catalog": None, "group": "active"}
-
-
-def load_catalog() -> None:
-    state["catalog"] = Catalog.from_celestrak(state["group"])
-    log.warning("OrbTrack: %d satellites loaded from CelesTrak '%s'", len(state["catalog"]), state["group"])
-
 
 def div(classes: str = "", text: str | None = None) -> ui.element:
     if text is not None:
@@ -56,6 +51,7 @@ def local_hm(ms: float) -> str:
 @ui.page("/")
 def index() -> None:
     catalog: Catalog = state["catalog"]
+    loaded = {"version": state["version"]}  # which catalog refresh this page is showing
     ts = catalog.ts
     observer = home_observer()
     observer_frame = frames.observer_frame(observer)
@@ -96,10 +92,7 @@ def index() -> None:
             }
 
     # Legend with per-class toggles, and quick targets
-    counts = {name: 0 for name in frames.ORBIT_CLASSES}
-    for sat in catalog:
-        counts[sat.orbit_class] += 1
-    legend_rows = []
+    legend_rows, count_labels = [], {}
     with div("glass legend") as legend:
         div("title", "ORBITS")
         for index, name in enumerate(frames.ORBIT_CLASSES):
@@ -108,7 +101,7 @@ def index() -> None:
                     f"background:{CLASS_COLORS[index]};box-shadow:0 0 10px {CLASS_COLORS[index]}"
                 )
                 ui.label(CLASS_LABELS[name])
-                div("count", f"{counts[name]:,}")
+                count_labels[name] = div("count", "")
             row.on("click", lambda _, i=index: set_visible(i, not visible[i]))
             legend_rows.append(row)
         div("title quick-title", "QUICK TARGETS")
@@ -146,6 +139,10 @@ def index() -> None:
         with div("pass"):
             div("k", f"NEXT PASS OVER {observer.name.upper()}")
             next_pass = div("", "")
+        with div("history gone") as history:
+            div("k", f"ALTITUDE · LAST {HISTORY_DAYS} DAYS")
+            spark = ui.html("", sanitize=False).classes("spark")
+            spark_caption = div("caption", "")
         div("hint", "SCROLL TO ZOOM · ESC TO RELEASE")
 
     timebar = Timebar()
@@ -234,8 +231,43 @@ def index() -> None:
         card.classes(remove="hidden")
         next_pass.text = "computing…"
         await refresh_next_pass()
+        await show_history(sat)
         if view["mode"] == "sky":
             await refresh_sky(force=True)
+
+    async def show_history(sat) -> None:
+        """The altitude sparkline, from whatever history the local store holds for this satellite."""
+        since = datetime.now(UTC) - timedelta(days=HISTORY_DAYS)
+        series = await run.io_bound(jobs.store().series, sat.norad_id, since)
+        if selected["sat"] is not sat or series is None:
+            return
+        altitude = series["semimajor_km"] - frames.EARTH_RADIUS_KM
+        svg = altitude_sparkline(series["epoch"], altitude)
+        if svg is None:
+            history.classes(add="gone")
+            return
+        spark.content = svg
+        spark_caption.text = sparkline_caption(series["epoch"], altitude)
+        history.classes(remove="gone")
+
+    def update_counts() -> None:
+        counts = {name: 0 for name in frames.ORBIT_CLASSES}
+        for sat in catalog:
+            counts[sat.orbit_class] += 1
+        for name, label in count_labels.items():
+            label.text = f"{counts[name]:,}"
+
+    async def swap_catalog() -> None:
+        """A fresh catalog arrived (every 2 h): hand it to the browser without a reload."""
+        nonlocal catalog
+        catalog = state["catalog"]
+        loaded["version"] = state["version"]
+        globe.init_catalog(frames.catalog_payload(catalog))
+        update_counts()
+        update_status()
+        push["dirty"] = True
+        if selected["sat"] is not None:
+            await select(selected["sat"].norad_id)
 
     async def surprise() -> None:
         await select(random.choice(list(catalog)).norad_id)
@@ -354,6 +386,8 @@ def index() -> None:
             return
         push.update(busy=True, dirty=False, last=time.time())
         try:
+            if loaded["version"] != state["version"]:
+                await swap_catalog()
             await push_frame()
         finally:
             push["busy"] = False
@@ -519,6 +553,7 @@ def index() -> None:
 
     def start() -> None:
         hello()
+        update_counts()
         view_buttons["globe"].classes(add="active")
         timebar.set_clock(clock.state())
         update_status()
@@ -536,7 +571,8 @@ def index() -> None:
 def serve(group: str = "active", port: int = 8080, show: bool = True) -> None:
     state["group"] = group
     app.add_static_files("/orbtrack-static", STATIC_DIR)
-    app.on_startup(load_catalog)
+    app.on_startup(jobs.load_catalog)
+    app.on_startup(jobs.start)
     ui.run(
         title="OrbTrack",
         port=port,

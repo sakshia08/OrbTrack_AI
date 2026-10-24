@@ -49,3 +49,15 @@ A plain-language record of what each phase built. The plan for upcoming phases i
   - drag to look around, scroll to zoom
 - **Little things:** satellites in Earth's shadow dim (the sunlit ones are the ones you could see at night); the comet trail always stays attached to the satellite; quick targets moved into the legend; keyboard shortcuts (Space, ← →, L, V, Esc).
 - **Tests:** new tests for the clock, the palette, the inertial keyframes (including one that checks the 1000× interpolation stays within 25 km of the real orbit) and the sky geometry (pass arcs point at the real ISS within 0.2°). 66 tests in total (up from 25), all passing.
+
+## Phase 4a · History store
+
+- **Orbit history on your machine:** every orbit OrbTrack sees is saved in one local DuckDB file (`~/.local/share/orbtrack/history.duckdb`). Each satellite + time is stored once, so downloading the same data twice does no harm. It can be exported to Parquet.
+- **Two sources:**
+  - CelesTrak: every 2 hours the app saves the latest orbits of the watchlist satellites, so history builds up on its own (only a few MB a year)
+  - Space-Track: CelesTrak has no past orbits, so with your free login in a `.env` file OrbTrack downloads a year of history for a watchlist of 13 satellites (ISS, Tiangong, Hubble, GOES and other weather satellites, Landsats), then only what is new each night. Requests are spaced out to stay well inside Space-Track's limits.
+- **Space-Track is ready but not switched on yet:** the client is built and tested against a fake server; it starts working as soon as a login is added to `.env`. Until then history grows from CelesTrak only.
+- **Runs by itself:** a scheduler inside the app refreshes the catalog every 2 hours without a page reload, and syncs Space-Track every night at 3am (or soon after start if it has not run for a day).
+- **New commands:** `orbtrack history sync`, `status`, `show ISS` (reboosts marked ▲), `watch <satellite>`, `export <folder>`.
+- **On the follow card:** a glowing chart of the satellite's altitude over the last 90 days, where you can spot reboosts as steps up.
+- **Tests:** 14 new offline tests with a fake Space-Track server and temporary databases: duplicates ignored, snapshots keep only the watchlist, a reboost shows as a 1.5 km step, the rate limiter waits when the minute is full, and a second sync only asks for what is new. 80 tests in total, all passing.

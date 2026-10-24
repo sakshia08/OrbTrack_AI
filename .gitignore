@@ -6,3 +6,6 @@ __pycache__/
 *.bsp
 # TLE files Skyfield downloads when the notebooks run locally
 notebooks/*.txt
+
+# Secrets (Space-Track login)
+.env

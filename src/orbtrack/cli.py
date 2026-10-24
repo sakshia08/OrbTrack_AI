@@ -1,13 +1,14 @@
-"""Command line: `orbtrack app`, `orbtrack where ISS`, `orbtrack passes ISS`, `orbtrack catalog`."""
+"""Command line: `orbtrack app`, `where ISS`, `passes ISS`, `catalog`, `history sync | status | show ISS`."""
 
 import argparse
 import sys
+from pathlib import Path
 from collections import Counter
 
 import numpy as np
 from skyfield.api import load, wgs84
 
-from orbtrack.config import Observer, home_observer
+from orbtrack.config import Observer, home_observer, spacetrack_credentials
 from orbtrack.engine import Catalog, next_passes, positions
 
 
@@ -67,6 +68,62 @@ def cmd_app(args) -> None:
     serve(group=args.group, port=args.port, show=not args.no_browser)
 
 
+def cmd_history(args) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from orbtrack.data.celestrak import fetch_group
+    from orbtrack.data.history import EARTH_RADIUS_KM, HistoryStore
+    from orbtrack.data.sync import snapshot, sync_spacetrack
+
+    store = HistoryStore()
+    if args.action == "status":
+        st = store.status()
+        print(f"{st['path']}\n  {st['rows']:,} element sets for {st['satellites']:,} satellites,"
+              f" {st['watchlist']} on the Space-Track watchlist")
+        for row in st["by_source"]:
+            print(f"  {row['source']:10s} {row['rows']:>10,} rows  {row['satellites']:>6,} sats"
+                  f"  {row['first']:%Y-%m-%d} → {row['last']:%Y-%m-%d}")
+        for source, at in st["last_sync"].items():
+            print(f"  last {source} sync {at:%Y-%m-%d %H:%M} UTC")
+        return
+    if args.action == "export":
+        print(f"Parquet written to {store.export_parquet(Path(args.target or 'history-parquet'))}")
+        return
+    if args.action == "sync":
+        print(snapshot(store, fetch_group(args.group)))
+        credentials = spacetrack_credentials()
+        if credentials is None:
+            print("spacetrack: skipped (add SPACETRACK_IDENTITY and SPACETRACK_PASSWORD to .env)")
+        else:
+            print(sync_spacetrack(store, credentials, days=args.days or 365))
+        return
+
+    catalog = Catalog.from_celestrak(args.group, load.timescale())
+    if args.action in ("watch", "unwatch"):
+        if not args.target:
+            print("\n".join(f"  {n:>6}  {s.name if (s := catalog.get(n)) else '?'}" for n in store.watchlist()))
+            return
+        sat = _pick(catalog, args.target)
+        (store.watch if args.action == "watch" else store.unwatch)([sat.norad_id])
+        print(f"{'Watching' if args.action == 'watch' else 'Stopped watching'} {sat.name} (NORAD {sat.norad_id})")
+        return
+
+    # show
+    sat = _pick(catalog, args.target or "ISS")
+    args.days = args.days or 30
+    series = store.series(sat.norad_id, since=datetime.now(UTC) - timedelta(days=args.days))
+    if not len(series["epoch"]):
+        sys.exit(f"No history for {sat.name} yet: run `orbtrack history sync`.")
+    mean_alt = series["semimajor_km"] - EARTH_RADIUS_KM
+    print(f"{sat.name} (NORAD {sat.norad_id}), last {args.days} days: {len(mean_alt)} element sets")
+    print("  epoch (UTC)          mean alt   perigee   apogee    change  source")
+    for i, epoch in enumerate(series["epoch"]):
+        change = mean_alt[i] - mean_alt[i - 1] if i else 0.0
+        mark = "  ▲ raised" if change > 0.5 else "  ▼ lowered" if change < -2 else ""
+        print(f"  {str(epoch)[:16].replace('T', ' ')}  {mean_alt[i]:8.2f}  {series['perigee_km'][i]:8.2f}"
+              f"  {series['apogee_km'][i]:7.2f}  {change:+7.2f}  {series['source'][i]}{mark}")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="orbtrack", description=__doc__)
     parser.add_argument("--group", default="active", help="CelesTrak group (default: active)")
@@ -93,9 +150,15 @@ def main(argv: list[str] | None = None) -> None:
     app.add_argument("--no-browser", action="store_true", help="don't open a browser tab")
     app.set_defaults(func=cmd_app)
 
+    history = sub.add_parser("history", help="local orbit history (Space-Track + CelesTrak snapshots)")
+    history.add_argument("action", choices=["sync", "status", "show", "watch", "unwatch", "export"])
+    history.add_argument("target", nargs="?", help="satellite for show/watch/unwatch, folder for export")
+    history.add_argument("--days", type=int, help="show: how far back (30); sync: Space-Track backfill (365)")
+    history.set_defaults(func=cmd_history)
+
     args = parser.parse_args(argv)
-    if args.func is cmd_app:
-        cmd_app(args)
+    if args.func in (cmd_app, cmd_history):
+        args.func(args)
     else:
         args.func(args, Catalog.from_celestrak(args.group, load.timescale()))
 
