@@ -31,4 +31,14 @@ The order follows the fun: the globe and HUD come first because they are the rew
 - [x] Real-time day/night terminator with city lights, ocean glint and atmosphere
 - [x] Click-to-follow camera with comet trail, orbit-ahead line, live telemetry and next pass
 - [x] First frame with satellites in under 3 s (1.1–1.4 s measured headless)
-- [ ] Smooth animation of the full catalog checked on your own laptop
+- [x] Smooth animation of the full catalog checked on your own laptop
+
+## Phase 3 · Mission control HUD
+
+- [x] Time machine: pause, rewind and fast-forward up to 1000×, scrub ±48 h, back to live; every layer follows the clock
+- [x] Satellites move in inertial space and the Earth turns under them, so orbits stay round even at 1000×
+- [x] Timeline shows day and night over your city and upcoming passes
+- [x] Ctrl+K command palette with a keyword parser (satellites, views, orbit filters, time jumps, speeds); no LLM needed
+- [x] "Your sky": camera at your city looking up, sky dome with compass, day/twilight/night sky, pass arcs; click a pass to watch it
+- [x] Satellites in Earth's shadow dim; comet trail stays glued to the satellite at any speed
+- [ ] A friend says "whoa", unprompted

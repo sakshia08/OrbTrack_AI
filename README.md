@@ -13,6 +13,12 @@ Needs [uv](https://docs.astral.sh/uv/).
 ```bash
 uv sync
 uv run orbtrack app            # the live 3D globe at http://localhost:8080
+```
+
+In the app: **Ctrl+K** (or `/`) search and commands · **Space** pause · **← →** slower / faster ·
+**L** back to live · **V** globe / your sky · **Esc** let go.
+
+```bash
 uv run orbtrack where ISS          # where the ISS is right now
 uv run orbtrack passes ISS         # passes over you in the next 48 h (UTC)
 uv run orbtrack catalog            # the active catalog by orbit class
@@ -29,9 +35,12 @@ Set your location with `ORBTRACK_HOME="lat,lon,elevation_m"` (default: Bangalore
 | `src/orbtrack/engine/catalog.py` | Satellite catalog, name/NORAD lookup, orbit classes |
 | `src/orbtrack/engine/propagate.py` | Vectorised SGP4 for the whole catalog, ground tracks |
 | `src/orbtrack/engine/passes.py` | Passes over an observer, naked-eye visibility |
-| `src/orbtrack/app/main.py` | The web page: globe, HUD, timers that push data to the browser |
-| `src/orbtrack/app/frames.py` | Positions, trails, Sun and telemetry, packed for the browser |
-| `src/orbtrack/app/globe.js` | The globe component: Earth shader, satellite point cloud, follow cam |
+| `src/orbtrack/app/main.py` | The web page: globe, HUD, palette, your-sky panel, timers that push data to the browser |
+| `src/orbtrack/app/frames.py` | Positions, trails, Sun, passes and sky geometry, packed for the browser |
+| `src/orbtrack/app/clock.py` | The time machine: a simulated clock with rates, pause and jumps |
+| `src/orbtrack/app/palette.py` | Ctrl+K command palette: keywords to actions, no LLM |
+| `src/orbtrack/app/globe.js` | The globe component: Earth shader, satellite point cloud, follow cam, your-sky view |
+| `src/orbtrack/app/timebar.js` | The time machine bar: clock, speed buttons, ±48 h scrub track |
 | `src/orbtrack/app/static/` | Vendored globe.gl, three.js and Earth/star textures |
 | `src/orbtrack/cli.py` | `orbtrack` command |
 | `tests/` | Offline tests on a frozen catalog, plus an independent pass cross-check |

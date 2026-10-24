@@ -45,13 +45,34 @@ def ecef_to_geodetic(x, y, z):
     return np.degrees(lat), np.degrees(np.arctan2(y, x)), height
 
 
+def gmst_radians(t: Time) -> np.ndarray:
+    """Greenwich mean sidereal angle: the rotation from TEME to Earth-fixed coordinates."""
+    theta, _ = theta_GMST1982(np.atleast_1d(t.whole), np.atleast_1d(t.ut1_fraction))
+    return theta
+
+
+def teme_positions(catalog: Catalog, t: Time) -> tuple[np.ndarray, np.ndarray]:
+    """Inertial (TEME) positions in km shaped (satellites, times, 3), and a mask of good ones."""
+    jd, fr = _utc_jd(t)
+    errors, r, _ = catalog.satrec_array.sgp4(jd, fr)
+    return r, errors == 0
+
+
+def teme_track(satellite: Satellite, t: Time) -> np.ndarray:
+    """One satellite's TEME positions in km at many times, shaped (times, 3); NaN where SGP4 fails."""
+    jd, fr = _utc_jd(t)
+    errors, r, _ = satellite.sat.model.sgp4_array(jd, fr)
+    r[errors != 0] = np.nan
+    return r
+
+
 def positions(catalog: Catalog, t: Time) -> Positions:
     """Propagate the whole catalog at once with sgp4's vectorised SatrecArray."""
     jd, fr = _utc_jd(t)
     errors, r, v = catalog.satrec_array.sgp4(jd, fr)
 
     # TEME -> Earth-fixed: rotate by Greenwich mean sidereal time (polar motion ignored, ~10 m).
-    theta, _ = theta_GMST1982(np.atleast_1d(t.whole), np.atleast_1d(t.ut1_fraction))
+    theta = gmst_radians(t)
     cos_t, sin_t = np.cos(theta), np.sin(theta)
     x = cos_t * r[..., 0] + sin_t * r[..., 1]
     y = -sin_t * r[..., 0] + cos_t * r[..., 1]

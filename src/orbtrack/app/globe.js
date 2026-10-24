@@ -59,21 +59,60 @@ const EARTH_FRAGMENT = `
     #include <colorspace_fragment>
   }`;
 
+// Comet tail: a tube around one orbit, faded by how long ago the satellite was at each point.
+// Its width scales with distance to the camera, so it stays a few pixels wide at any zoom.
 const TAIL_VERTEX = `
-  varying float vAlong;
+  attribute vec3 center;
+  uniform float uDuration;
+  uniform float uWidth;
+  varying float vT;
   void main() {
-    vAlong = uv.x;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    vT = uv.x * uDuration;
+    vec4 wc = modelMatrix * vec4(center, 1.0);
+    float d = length(cameraPosition - wc.xyz);
+    vec3 p = center + (position - center) * d * uWidth;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
   }`;
 
 const TAIL_FRAGMENT = `
   uniform vec3 color;
-  varying float vAlong;
+  uniform float uNow;
+  uniform float uPeriod;
+  uniform float uTail;
+  varying float vT;
   void main() {
-    float a = pow(vAlong, 1.6);
+    float age = mod(uNow - vT, uPeriod);
+    float a = age < uTail ? pow(1.0 - age / uTail, 1.6) : 0.0;
+    if (a < 0.003) discard;
     gl_FragColor = vec4(mix(color, vec3(1.0), a * a * 0.6) * a, a);
   }`;
 
+// The orbit ahead: dashes along the rest of the ring, brightest just in front of the satellite.
+const AHEAD_VERTEX = `
+  attribute float aT;
+  varying float vT;
+  void main() {
+    vT = aT;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }`;
+
+const AHEAD_FRAGMENT = `
+  uniform vec3 color;
+  uniform float uNow;
+  uniform float uPeriod;
+  uniform float uTail;
+  varying float vT;
+  void main() {
+    float age = mod(uNow - vT, uPeriod);
+    float ahead = uPeriod - age;
+    float dash = step(0.45, fract(vT / (uPeriod / 140.0)));
+    float a = dash * 0.5 * (1.0 - 0.65 * ahead / uPeriod) * smoothstep(0.6 * uTail, uTail, age);
+    if (a < 0.01) discard;
+    gl_FragColor = vec4(color, a);
+  }`;
+
+// Satellites: slerp between two inertial keyframes, then the parent group turns them with
+// the Earth. Points in the Earth's shadow are dimmed.
 const SAT_VERTEX = `
   attribute vec3 posA;
   attribute vec3 posB;
@@ -82,15 +121,26 @@ const SAT_VERTEX = `
   attribute float cls;
   uniform float uT;
   uniform float uPixelRatio;
+  uniform float uSizeScale;
   uniform float uVisible[5];
+  uniform vec3 uSun;
   varying vec3 vTint;
   void main() {
-    vec3 p = mix(posA, posB, uT);
+    float ra = length(posA), rb = length(posB);
+    if (ra < 1.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; return; }
+    vec3 ua = posA / ra, ub = posB / rb;
+    float w = atan(length(cross(ua, ub)), dot(ua, ub));
+    vec3 u = w < 1e-5 ? mix(ua, ub, uT) : (sin((1.0 - uT) * w) * ua + sin(uT * w) * ub) / sin(w);
+    vec3 p = normalize(u) * mix(ra, rb, uT);
     vec4 mv = modelViewMatrix * vec4(p, 1.0);
     gl_Position = projectionMatrix * mv;
+
+    float along = dot(p, uSun);
+    float lit = along > 0.0 ? 1.0 : smoothstep(99.0, 101.5, length(p - along * uSun));
     float visible = uVisible[int(cls + 0.5)];
-    gl_PointSize = visible * clamp(size * uPixelRatio * 1400.0 / -mv.z, 2.2 * uPixelRatio, 10.0 * uPixelRatio);
-    vTint = tint;
+    float px = size * uSizeScale * uPixelRatio * 1400.0 / -mv.z;
+    gl_PointSize = visible * mix(0.8, 1.0, lit) * clamp(px, 2.2 * uPixelRatio, 10.0 * uPixelRatio);
+    vTint = tint * mix(0.3, 1.0, lit);
   }`;
 
 const SAT_FRAGMENT = `
@@ -100,8 +150,41 @@ const SAT_FRAGMENT = `
     if (d > 1.0) discard;
     float core = smoothstep(0.45, 0.0, d);
     float halo = pow(1.0 - d, 2.5) * 0.55;
-    gl_FragColor = vec4(vTint * (core + halo) + core * 0.35, core + halo);
+    gl_FragColor = vec4(vTint * (core + halo) + vTint * core * 0.35, core + halo);
   }`;
+
+// Your sky: a dome around the observer, blue by day, warm at twilight, clear at night.
+const SKY_VERTEX = `
+  varying vec3 vDir;
+  void main() {
+    vDir = normalize((modelMatrix * vec4(position, 0.0)).xyz);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }`;
+
+const SKY_FRAGMENT = `
+  uniform vec3 uUp;
+  uniform vec3 uSun;
+  varying vec3 vDir;
+  void main() {
+    vec3 d = normalize(vDir);
+    float el = dot(d, uUp);
+    float sunAlt = dot(uSun, uUp);
+    float day = smoothstep(-0.1, 0.12, sunAlt);
+    float twilight = exp(-pow((sunAlt + 0.04) / 0.1, 2.0));
+    float toSun = max(dot(d, uSun), 0.0);
+    float h = pow(1.0 - clamp(el, 0.0, 1.0), 4.0);
+
+    vec3 sky = mix(vec3(0.06, 0.22, 0.62), vec3(0.42, 0.62, 0.92), h) * day;
+    sky += vec3(1.0, 0.42, 0.16) * twilight * h * (0.25 + 0.75 * pow(toSun, 4.0));
+    sky += vec3(1.0, 0.9, 0.7) * pow(toSun, 600.0) * day * 3.0;   // the Sun itself
+    sky += vec3(0.03, 0.08, 0.2) * h * (1.0 - day);                // faint airglow at night
+    float a = clamp(day * 0.5 + twilight * h * 0.45 + h * 0.2, 0.0, 0.75);
+    gl_FragColor = vec4(sky / max(a, 0.001), a);
+    #include <colorspace_fragment>
+  }`;
+
+const OMEGA_EARTH = 7.2921158553e-5; // rad/s, sidereal
+const DEG = Math.PI / 180;
 
 function decode(b64, Type) {
   const bin = atob(b64);
@@ -129,11 +212,65 @@ function ringTexture(THREE) {
   return t;
 }
 
+// A text label that keeps the same size on screen.
+// `size` is the font size in CSS pixels; the canvas is drawn at 3x so it stays crisp.
+function textSprite(THREE, text, { color = "#cfe6ff", size = 13, weight = 600, opacity = 1 } = {}) {
+  const k = 3;
+  const c = document.createElement("canvas");
+  const g = c.getContext("2d");
+  const font = `${weight} ${size * k}px "JetBrains Mono", ui-monospace, monospace`;
+  g.font = font;
+  c.width = Math.ceil(g.measureText(text).width) + 8 * k;
+  c.height = (size + 8) * k;
+  g.font = font;
+  g.textBaseline = "middle";
+  g.shadowColor = "rgba(0, 0, 0, 0.85)";
+  g.shadowBlur = 3 * k;
+  g.fillStyle = color;
+  g.fillText(text, 4 * k, c.height / 2);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({ map: t, transparent: true, depthWrite: false, sizeAttenuation: false, opacity })
+  );
+  // With sizeAttenuation off, a scale of 1 spans half the viewport height; keep CSS pixels instead.
+  const h = (2 * c.height) / k / window.innerHeight;
+  sprite.scale.set((h * c.width) / c.height, h, 1);
+  sprite.renderOrder = 6;
+  return sprite;
+}
+
+// The simulated clock is a line: sim = sim0 + (real - real0) * rate. The server sends the
+// three numbers; the browser estimates how far its own clock is from the server's.
+class SimClock {
+  constructor() {
+    this.state = { sim0_ms: Date.now(), real0_ms: Date.now(), rate: 1 };
+    this.samples = [];
+    this.skew = 0;
+  }
+  set(state, sentMs) {
+    this.state = state;
+    if (sentMs !== undefined) {
+      this.samples.push(sentMs - Date.now()); // = skew - latency, so the max is the best guess
+      if (this.samples.length > 20) this.samples.shift();
+      this.skew = Math.max(...this.samples);
+    }
+  }
+  real() {
+    return Date.now() + this.skew;
+  }
+  now() {
+    const s = this.state;
+    return s.sim0_ms + (this.real() - s.real0_ms) * s.rate;
+  }
+}
+
 export default {
   template: `
     <div class="orbtrack-globe-root">
       <div ref="canvas" class="orbtrack-globe-canvas"></div>
       <div ref="tip" class="orbtrack-tip"></div>
+      <div ref="flash" class="orbtrack-flash"></div>
     </div>`,
 
   created() {
@@ -184,24 +321,40 @@ export default {
 
     new ResizeObserver(() => globe.width(el.clientWidth).height(el.clientHeight)).observe(el);
 
+    // Everything that lives in inertial space hangs off this group, turned by the sidereal angle.
+    this.orbitFrame = new THREE.Group();
+    globe.scene().add(this.orbitFrame);
+
     this.marker = new THREE.Sprite(
       new THREE.SpriteMaterial({ map: ringTexture(THREE), depthTest: false, transparent: true, sizeAttenuation: false })
     );
     this.marker.scale.set(0.045, 0.045, 1);
     this.marker.visible = false;
     this.marker.renderOrder = 10;
-    globe.scene().add(this.marker);
+    this.orbitFrame.add(this.marker);
 
+    this.clock = new SimClock();
+    this.sunTeme = new THREE.Vector3(1, 0, 0);
+    this.sunWorld = new THREE.Vector3(1, 0, 0);
+    this.theta = 0;
     this.selected = -1;
     this.following = false;
-    this.offsetMs = 0;
+    this.sky = null;
     this.firstFrameSent = false;
+    this.tmp = { x: 0, y: 0, z: 0 };
     this.bindPointer();
     this.markReady();
+    this.$emit("ready");
     this.loop();
   },
 
   methods: {
+    // "ready" is also sent from mounted(); this covers a socket that connected after that.
+    async hello() {
+      await this.ready;
+      this.$emit("ready");
+    },
+
     async initCatalog(payload) {
       await this.ready;
       const THREE = this.THREE;
@@ -236,7 +389,9 @@ export default {
         uniforms: {
           uT: { value: 0 },
           uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
+          uSizeScale: { value: 1 },
           uVisible: { value: [1, 1, 1, 1, 1] },
+          uSun: { value: this.sunTeme },
         },
         vertexShader: SAT_VERTEX,
         fragmentShader: SAT_FRAGMENT,
@@ -246,7 +401,8 @@ export default {
       });
       this.points = new THREE.Points(geometry, this.satMaterial);
       this.points.frustumCulled = false;
-      this.globe.scene().add(this.points);
+      this.points.renderOrder = 2;
+      this.orbitFrame.add(this.points);
     },
 
     async pushFrame(frame) {
@@ -256,78 +412,97 @@ export default {
       this.posB.set(decode(frame.b, Float32Array));
       this.attrA.needsUpdate = true;
       this.attrB.needsUpdate = true;
-      this.frameA = frame.a_ms;
-      this.frameB = frame.b_ms;
-      this.offsetMs = frame.a_ms - Date.now();
+      this.frame = { a: frame.a_ms, b: frame.b_ms, theta: frame.theta };
+      this.sunTeme.set(...frame.sun);
+      this.clock.set(frame.clock, frame.sent_ms);
       if (!this.firstFrameSent) {
         this.firstFrameSent = true;
         requestAnimationFrame(() => this.$emit("first_frame", { ms: Math.round(performance.now()) }));
       }
     },
 
-    async setSun(lat, lng) {
-      await this.ready;
-      const p = this.globe.getCoords(lat, lng, 0);
-      this.earthMaterial.uniforms.sunDir.value.set(p.x, p.y, p.z).normalize();
-    },
-
     setClassVisible(index, visible) {
       if (this.satMaterial) this.satMaterial.uniforms.uVisible.value[index] = visible ? 1 : 0;
     },
 
-    async select(noradId, trail, follow) {
+    async select(noradId, trail) {
       await this.ready;
       const index = this.ids ? this.ids.indexOf(noradId) : -1;
       this.selected = index;
       this.marker.visible = index >= 0;
       this.setTrail(trail);
-      if (follow && index >= 0) this.startFollow();
+      if (index < 0) return;
+      if (this.sky) this.sky.track = true;
+      else this.startFollow();
     },
 
     setTrail(trail) {
       const THREE = this.THREE;
-      const scene = this.globe.scene();
       for (const obj of this.trailObjects || []) {
-        scene.remove(obj);
+        this.orbitFrame.remove(obj);
         obj.geometry.dispose();
         obj.material.dispose();
       }
       this.trailObjects = [];
+      this.trail = trail;
       if (!trail) return;
-      const toVec = ([lat, lng, alt]) => {
-        const c = this.globe.getCoords(lat, lng, alt);
-        return new THREE.Vector3(c.x, c.y, c.z);
+
+      const pts = trail.points.map(([x, y, z]) => new THREE.Vector3(x, y, z));
+      const duration = trail.step_s * (pts.length - 1);
+      const shared = {
+        uNow: { value: 0 },
+        uPeriod: { value: trail.period_s },
+        uTail: { value: trail.tail_s },
       };
+      this.trailUniforms = shared;
 
-      // Comet tail: a thin tube that fades in towards the satellite.
-      const past = trail.past.map(toVec);
-      if (past.length > 1) {
-        const curve = new THREE.CatmullRomCurve3(past);
-        const radius = 0.0016 * this.globe.camera().position.length(); // a few pixels at any zoom
-        const tail = new THREE.Mesh(
-          new THREE.TubeGeometry(curve, past.length * 4, radius, 8, false),
-          new THREE.ShaderMaterial({
-            uniforms: { color: { value: new THREE.Color("#7ef3ff") } },
-            vertexShader: TAIL_VERTEX,
-            fragmentShader: TAIL_FRAGMENT,
-            transparent: true,
-            depthWrite: false,
-            blending: THREE.AdditiveBlending,
-          })
-        );
-        this.trailObjects.push(tail);
+      // Points are evenly spaced in time, so walk the curve by its own parameter, not arc length.
+      const curve = new THREE.CatmullRomCurve3(pts);
+      curve.getPointAt = (u, target) => curve.getPoint(u, target);
+      curve.getTangentAt = (u, target) => curve.getTangent(u, target);
+      const segments = (pts.length - 1) * 2, radial = 6;
+      const geometry = new THREE.TubeGeometry(curve, segments, 1, radial, false);
+      const center = new Float32Array((segments + 1) * (radial + 1) * 3);
+      const c = new THREE.Vector3();
+      for (let i = 0; i <= segments; i++) {
+        curve.getPoint(i / segments, c);
+        for (let j = 0; j <= radial; j++) c.toArray(center, (i * (radial + 1) + j) * 3);
       }
-
-      // The orbit ahead: a faint dashed line.
-      const ahead = new THREE.Line(
-        new THREE.BufferGeometry().setFromPoints(trail.future.map(toVec)),
-        new THREE.LineDashedMaterial({ color: "#7ecbff", dashSize: 0.9, gapSize: 0.7, transparent: true, opacity: 0.45, depthWrite: false })
+      geometry.setAttribute("center", new THREE.BufferAttribute(center, 3));
+      const tail = new THREE.Mesh(
+        geometry,
+        new THREE.ShaderMaterial({
+          uniforms: {
+            ...shared,
+            color: { value: new THREE.Color("#7ef3ff") },
+            uDuration: { value: duration },
+            uWidth: { value: 0.0024 },
+          },
+          vertexShader: TAIL_VERTEX,
+          fragmentShader: TAIL_FRAGMENT,
+          transparent: true,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        })
       );
-      ahead.computeLineDistances();
-      this.trailObjects.push(ahead);
-      for (const obj of this.trailObjects) {
+
+      const lineGeometry = new THREE.BufferGeometry().setFromPoints(pts);
+      lineGeometry.setAttribute("aT", new THREE.BufferAttribute(Float32Array.from(pts, (_, i) => i * trail.step_s), 1));
+      const ahead = new THREE.Line(
+        lineGeometry,
+        new THREE.ShaderMaterial({
+          uniforms: { ...shared, color: { value: new THREE.Color("#7ecbff") } },
+          vertexShader: AHEAD_VERTEX,
+          fragmentShader: AHEAD_FRAGMENT,
+          transparent: true,
+          depthWrite: false,
+        })
+      );
+      for (const obj of [tail, ahead]) {
         obj.frustumCulled = false;
-        scene.add(obj);
+        obj.renderOrder = 3;
+        this.orbitFrame.add(obj);
+        this.trailObjects.push(obj);
       }
     },
 
@@ -336,17 +511,20 @@ export default {
       this.following = false;
       this.marker.visible = false;
       this.setTrail(null);
+      clearTimeout(this.followTimer);
+      if (this.sky) {
+        this.sky.track = false;
+        return;
+      }
       const controls = this.globe.controls();
       controls.enableRotate = true;
       controls.enableDamping = true;
-      clearTimeout(this.followTimer);
       const pov = this.globe.pointOfView();
       this.globe.pointOfView({ lat: pov.lat, lng: pov.lng, altitude: 2.6 }, 1200);
     },
 
     startFollow() {
-      const p = this.currentPosition(this.selected);
-      const geo = this.globe.toGeoCoords(p);
+      const geo = this.globe.toGeoCoords(this.worldPosition(this.selected));
       const altitude = Math.max(geo.altitude + 0.9, 1.1);
       const controls = this.globe.controls();
       controls.enableRotate = false;
@@ -354,44 +532,291 @@ export default {
       this.following = false;
       this.globe.pointOfView({ lat: geo.lat, lng: geo.lng, altitude }, 1400);
       clearTimeout(this.followTimer);
-      this.followTimer = setTimeout(() => (this.following = this.selected >= 0), 1400);
+      this.followTimer = setTimeout(() => (this.following = this.selected >= 0 && !this.sky), 1400);
     },
+
+    // --- Time --------------------------------------------------------------
 
     fraction() {
-      if (this.frameA === undefined) return 0;
-      const now = Date.now() + this.offsetMs;
-      return Math.min(Math.max((now - this.frameA) / (this.frameB - this.frameA), 0), 1.5);
+      if (!this.frame) return 0;
+      const f = (this.clock.now() - this.frame.a) / (this.frame.b - this.frame.a);
+      return Math.min(Math.max(f, 0), 1.6);
     },
 
-    currentPosition(i) {
-      const t = this.fraction();
-      const a = this.posA, b = this.posB, k = i * 3;
-      return {
-        x: a[k] + (b[k] - a[k]) * t,
-        y: a[k + 1] + (b[k + 1] - a[k + 1]) * t,
-        z: a[k + 2] + (b[k + 2] - a[k + 2]) * t,
-      };
+    // Satellite i in the inertial frame, slerped like the vertex shader does it.
+    localPosition(i, t, out) {
+      const A = this.posA, B = this.posB, k = i * 3;
+      const ax = A[k], ay = A[k + 1], az = A[k + 2], bx = B[k], by = B[k + 1], bz = B[k + 2];
+      const ra = Math.hypot(ax, ay, az), rb = Math.hypot(bx, by, bz);
+      if (ra < 1) return null;
+      const cx = ay * bz - az * by, cy = az * bx - ax * bz, cz = ax * by - ay * bx;
+      const w = Math.atan2(Math.hypot(cx, cy, cz), ax * bx + ay * by + az * bz);
+      let wa = 1 - t, wb = t;
+      if (w > 1e-6) {
+        const s = Math.sin(w);
+        wa = Math.sin((1 - t) * w) / s;
+        wb = Math.sin(t * w) / s;
+      }
+      const x = (wa * ax) / ra + (wb * bx) / rb;
+      const y = (wa * ay) / ra + (wb * by) / rb;
+      const z = (wa * az) / ra + (wb * bz) / rb;
+      const r = (ra + (rb - ra) * t) / Math.hypot(x, y, z);
+      out.x = x * r;
+      out.y = y * r;
+      out.z = z * r;
+      return out;
+    },
+
+    // Inertial -> Earth-fixed, the same turn as orbitFrame.rotation.y = -theta.
+    toWorld(p, out) {
+      const c = Math.cos(this.theta), s = Math.sin(this.theta);
+      const x = p.x, z = p.z;
+      out.x = c * x - s * z;
+      out.y = p.y;
+      out.z = s * x + c * z;
+      return out;
+    },
+
+    worldPosition(i) {
+      const p = this.localPosition(i, this.fraction(), { x: 0, y: 0, z: 0 });
+      return p ? this.toWorld(p, p) : { x: 0, y: 0, z: 0 };
     },
 
     loop() {
       requestAnimationFrame(() => this.loop());
-      if (!this.points) return;
-      this.satMaterial.uniforms.uT.value = this.fraction();
+      if (!this.points || !this.frame) return;
+      const simNow = this.clock.now();
+      const t = this.fraction();
+      this.theta = this.frame.theta + (OMEGA_EARTH * (simNow - this.frame.a)) / 1000;
+      this.orbitFrame.rotation.y = -this.theta;
+      this.satMaterial.uniforms.uT.value = t;
+      this.toWorld(this.sunTeme, this.sunWorld);
+      this.earthMaterial.uniforms.sunDir.value.copy(this.sunWorld);
+      if (this.trail) this.trailUniforms.uNow.value = (simNow - this.trail.t0_ms) / 1000;
+
       if (this.selected >= 0) {
-        const p = this.currentPosition(this.selected);
-        this.marker.position.set(p.x, p.y, p.z);
+        const p = this.localPosition(this.selected, t, this.tmp);
+        if (p) this.marker.position.set(p.x, p.y, p.z);
         if (this.following) {
-          const geo = this.globe.toGeoCoords(p);
-          const cam = this.globe.camera().position;
-          const altitude = cam.length() / R - 1; // keep the user's zoom
+          const geo = this.globe.toGeoCoords(this.worldPosition(this.selected));
+          const altitude = this.globe.camera().position.length() / R - 1; // keep the user's zoom
           this.globe.pointOfView({ lat: geo.lat, lng: geo.lng, altitude }, 0);
         }
       }
+      if (this.sky) this.updateSky();
     },
 
-    // Picking: project candidates to screen space and take the nearest one in front of the Earth.
+    // --- Your sky ----------------------------------------------------------
+
+    skyDir(altDeg, azDeg) {
+      const f = this.obs, alt = altDeg * DEG, az = azDeg * DEG;
+      const h = Math.cos(alt), s = Math.sin(alt);
+      return new this.THREE.Vector3(
+        h * (Math.sin(az) * f.east[0] + Math.cos(az) * f.north[0]) + s * f.up[0],
+        h * (Math.sin(az) * f.east[1] + Math.cos(az) * f.north[1]) + s * f.up[1],
+        h * (Math.sin(az) * f.east[2] + Math.cos(az) * f.north[2]) + s * f.up[2]
+      );
+    },
+
+    buildDome() {
+      const THREE = this.THREE;
+      const D = 4; // dome radius in scene units; only directions matter from its centre
+      const dome = new THREE.Group();
+      const sky = new THREE.Mesh(
+        new THREE.SphereGeometry(D * 0.9, 48, 24),
+        new THREE.ShaderMaterial({
+          uniforms: { uUp: { value: new THREE.Vector3(...this.obs.up) }, uSun: { value: this.sunWorld } },
+          vertexShader: SKY_VERTEX,
+          fragmentShader: SKY_FRAGMENT,
+          side: THREE.BackSide,
+          transparent: true,
+          depthWrite: false,
+        })
+      );
+      sky.renderOrder = -2;
+      dome.add(sky);
+
+      const line = (points, opacity) => {
+        const obj = new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints(points),
+          new THREE.LineBasicMaterial({ color: "#8fd3ff", transparent: true, opacity, depthWrite: false })
+        );
+        obj.renderOrder = 1;
+        dome.add(obj);
+      };
+      for (const [alt, opacity] of [[0, 0.5], [30, 0.16], [60, 0.16]]) {
+        const ring = [];
+        for (let az = 0; az <= 360; az += 3) ring.push(this.skyDir(alt, az).multiplyScalar(D));
+        line(ring, opacity);
+      }
+      for (let az = 0; az < 360; az += 30) {
+        const spoke = [];
+        for (let alt = 0; alt <= 80; alt += 4) spoke.push(this.skyDir(alt, az).multiplyScalar(D));
+        line(spoke, az % 90 === 0 ? 0.2 : 0.09);
+      }
+      const labels = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+      labels.forEach((name, k) => {
+        const big = name.length === 1;
+        const sprite = textSprite(THREE, name, { color: big ? "#e9f4ff" : "#8fb4d9", size: big ? 16 : 11 });
+        sprite.position.copy(this.skyDir(3, k * 45).multiplyScalar(D));
+        dome.add(sprite);
+      });
+      for (const alt of [30, 60]) {
+        const sprite = textSprite(THREE, `${alt}°`, { color: "#6f8fb3", size: 10 });
+        sprite.position.copy(this.skyDir(alt + 1.5, 10).multiplyScalar(D));
+        dome.add(sprite);
+      }
+      this.passGroup = new THREE.Group();
+      dome.add(this.passGroup);
+      dome.position.copy(this.skyEye());
+      this.dome = dome;
+      this.domeRadius = D;
+      this.globe.scene().add(dome);
+      this.setPasses(this.passes || []);
+    },
+
+    skyEye() {
+      const p = new this.THREE.Vector3(...this.obs.position);
+      return p.setLength(Math.max(p.length(), R + 0.03)); // stay above globe.gl's sphere
+    },
+
+    setPasses(passes) {
+      this.passes = passes;
+      if (!this.passGroup) return;
+      const THREE = this.THREE;
+      for (const obj of [...this.passGroup.children]) {
+        this.passGroup.remove(obj);
+        obj.geometry?.dispose();
+        obj.material.map?.dispose();
+        obj.material.dispose();
+      }
+      const D = this.domeRadius * 0.98;
+      passes.forEach((p, k) => {
+        const color = p.visible ? "#ffd36b" : "#7ecbff";
+        const pts = p.path.map(([x, y, z]) => new THREE.Vector3(x, y, z).multiplyScalar(D));
+        const arc = new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints(pts),
+          new THREE.LineBasicMaterial({ color, transparent: true, opacity: p.visible ? 0.85 : 0.45, depthWrite: false })
+        );
+        arc.renderOrder = 4;
+        arc.userData.index = k;
+        this.passGroup.add(arc);
+        const peak = pts[pts.length >> 1];
+        const time = new Date(p.culminate_ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+        const label = textSprite(THREE, `${p.label}  ${time}  ${Math.round(p.max_el)}°`, {
+          color: p.visible ? "#ffe2a0" : "#a9dcff",
+          size: 11,
+        });
+        label.position.copy(peak);
+        label.center.set(0.5, -0.3);
+        this.passGroup.add(label);
+        const end = new THREE.Mesh(
+          new THREE.SphereGeometry(0.025, 8, 8),
+          new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, depthWrite: false })
+        );
+        end.position.copy(pts[pts.length - 1]);
+        this.passGroup.add(end);
+      });
+    },
+
+    async enterSky(frame) {
+      await this.ready;
+      if (this.sky) return;
+      this.obs = frame;
+      this.following = false;
+      clearTimeout(this.followTimer);
+      this.savedPov = this.globe.pointOfView();
+      this.globe.pointOfView({ lat: frame.lat, lng: frame.lon, altitude: 0.06 }, 1300);
+      this.flash(1300);
+      clearTimeout(this.skyTimer);
+      this.skyTimer = setTimeout(() => this.startSky(), 1300);
+    },
+
+    startSky() {
+      const camera = this.globe.camera();
+      const controls = this.globe.controls();
+      controls.enabled = false;
+      this.saved = { fov: camera.fov, near: camera.near, up: camera.up.clone() };
+      camera.fov = 80;
+      camera.near = 0.005;
+      camera.up.set(...this.obs.up);
+      camera.updateProjectionMatrix();
+      this.globe.showAtmosphere(false);
+      this.satMaterial.uniforms.uSizeScale.value = 0.06;
+      if (!this.dome) this.buildDome();
+      this.dome.visible = true;
+      const southward = this.obs.lat >= 0 ? 180 : 0;
+      this.sky = { az: southward, el: 35, dir: this.skyDir(35, southward), track: this.selected >= 0 };
+      this.updateSky();
+    },
+
+    exitSky() {
+      clearTimeout(this.skyTimer);
+      if (!this.sky) return;
+      const camera = this.globe.camera();
+      const controls = this.globe.controls();
+      this.sky = null;
+      this.dome.visible = false;
+      camera.fov = this.saved.fov;
+      camera.near = this.saved.near;
+      camera.up.copy(this.saved.up);
+      camera.updateProjectionMatrix();
+      controls.target.set(0, 0, 0);
+      controls.enabled = true;
+      this.globe.showAtmosphere(true);
+      this.satMaterial.uniforms.uSizeScale.value = 1;
+      this.globe.pointOfView({ lat: this.obs.lat, lng: this.obs.lon, altitude: 0.06 }, 0);
+      this.flash(500);
+      if (this.selected >= 0) this.startFollow();
+      else this.globe.pointOfView({ ...this.savedPov, altitude: Math.max(this.savedPov.altitude, 1.6) }, 1500);
+    },
+
+    updateSky() {
+      const THREE = this.THREE;
+      const camera = this.globe.camera();
+      const eye = this.skyEye();
+      const sky = this.sky;
+      if (sky.track && this.selected >= 0) {
+        const p = this.worldPosition(this.selected);
+        const want = new THREE.Vector3(p.x, p.y, p.z).sub(eye).normalize();
+        sky.dir.lerp(want, 0.08).normalize();
+        const up = new THREE.Vector3(...this.obs.up);
+        sky.el = Math.min(Math.max(Math.asin(sky.dir.dot(up)) / DEG, -2), 89);
+        const east = sky.dir.dot(new THREE.Vector3(...this.obs.east));
+        const north = sky.dir.dot(new THREE.Vector3(...this.obs.north));
+        sky.az = Math.atan2(east, north) / DEG;
+      }
+      sky.dir.copy(this.skyDir(sky.el, sky.az));
+      camera.position.copy(eye);
+      camera.lookAt(eye.clone().add(sky.dir));
+    },
+
+    lookAt(azDeg, elDeg) {
+      if (!this.sky) return;
+      this.sky.track = false;
+      this.sky.az = azDeg;
+      this.sky.el = elDeg;
+    },
+
+    flash(ms) {
+      const f = this.$refs.flash;
+      f.style.transition = "none";
+      f.style.opacity = 0;
+      requestAnimationFrame(() => {
+        f.style.transition = `opacity ${ms * 0.6}ms ease-in`;
+        f.style.opacity = 1;
+        setTimeout(() => {
+          f.style.transition = `opacity ${ms}ms ease-out`;
+          f.style.opacity = 0;
+        }, ms * 0.7);
+      });
+    },
+
+    // --- Picking and input ---------------------------------------------------
+
+    // Project candidates to screen space and take the nearest one in front of the Earth.
     pick(clientX, clientY, radiusPx) {
-      if (!this.points) return -1;
+      if (!this.points || !this.frame) return -1;
       const THREE = this.THREE;
       const rect = this.$refs.canvas.getBoundingClientRect();
       const camera = this.globe.camera();
@@ -399,20 +824,17 @@ export default {
       const v = new THREE.Vector3();
       const t = this.fraction();
       const visible = this.satMaterial.uniforms.uVisible.value;
+      const p = { x: 0, y: 0, z: 0 };
       let best = -1, bestD = radiusPx * radiusPx;
       for (let i = 0; i < this.count; i++) {
-        if (!visible[this.classes[i]]) continue;
-        const k = i * 3;
-        const x = this.posA[k] + (this.posB[k] - this.posA[k]) * t;
-        const y = this.posA[k + 1] + (this.posB[k + 1] - this.posA[k + 1]) * t;
-        const z = this.posA[k + 2] + (this.posB[k + 2] - this.posA[k + 2]) * t;
-        if (x * x + y * y + z * z < 1) continue; // failed propagation, parked at the centre
-        v.set(x, y, z).project(camera);
-        if (v.z > 1) continue;
+        if (!visible[this.classes[i]] || !this.localPosition(i, t, p)) continue;
+        this.toWorld(p, p);
+        v.set(p.x, p.y, p.z).project(camera);
+        if (v.z > 1 || v.z < -1) continue;
         const dx = ((v.x + 1) / 2) * rect.width - (clientX - rect.left);
         const dy = ((1 - v.y) / 2) * rect.height - (clientY - rect.top);
         const d = dx * dx + dy * dy;
-        if (d < bestD && !this.hiddenByEarth(camPos, { x, y, z })) {
+        if (d < bestD && !this.hiddenByEarth(camPos, p)) {
           best = i;
           bestD = d;
         }
@@ -436,14 +858,29 @@ export default {
     bindPointer() {
       const el = this.$refs.canvas;
       const tip = this.$refs.tip;
-      let down = null, lastMove = 0;
-      el.addEventListener("pointerdown", (e) => (down = { x: e.clientX, y: e.clientY }));
+      let down = null, last = null, lastMove = 0;
+      el.addEventListener("pointerdown", (e) => {
+        down = last = { x: e.clientX, y: e.clientY };
+        if (this.sky) el.setPointerCapture(e.pointerId);
+      });
       el.addEventListener("pointerup", (e) => {
-        if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return;
+        const click = down && Math.hypot(e.clientX - down.x, e.clientY - down.y) <= 5;
+        down = null;
+        if (!click) return;
         const i = this.pick(e.clientX, e.clientY, 14);
         if (i >= 0) this.$emit("select", { norad_id: this.ids[i] });
       });
       el.addEventListener("pointermove", (e) => {
+        if (this.sky && down) {
+          // Drag to look around: the sky moves with the pointer.
+          const degPerPx = this.globe.camera().fov / el.clientHeight;
+          this.sky.track = false;
+          this.sky.az -= (e.clientX - last.x) * degPerPx;
+          this.sky.el = Math.min(Math.max(this.sky.el + (e.clientY - last.y) * degPerPx, -5), 89);
+          last = { x: e.clientX, y: e.clientY };
+          tip.style.opacity = 0;
+          return;
+        }
         const now = performance.now();
         if (now - lastMove < 50) return;
         lastMove = now;
@@ -461,8 +898,38 @@ export default {
         tip.style.opacity = 1;
         el.style.cursor = "pointer";
       });
+      el.addEventListener(
+        "wheel",
+        (e) => {
+          if (!this.sky) return;
+          e.preventDefault();
+          const camera = this.globe.camera();
+          camera.fov = Math.min(Math.max(camera.fov * (1 + e.deltaY * 0.001), 20), 100);
+          camera.updateProjectionMatrix();
+        },
+        { passive: false }
+      );
       window.addEventListener("keydown", (e) => {
-        if (e.key === "Escape") this.$emit("release");
+        const typing = e.target.closest?.("input, textarea, [contenteditable]");
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+          e.preventDefault();
+          this.$emit("hotkey", { key: "palette" });
+          return;
+        }
+        if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
+        const keys = {
+          "/": "palette",
+          " ": "toggle",
+          ArrowRight: "faster",
+          ArrowLeft: "slower",
+          l: "live",
+          v: "view",
+          Escape: "escape",
+        };
+        const key = keys[e.key] || keys[e.key.toLowerCase()];
+        if (!key) return;
+        e.preventDefault();
+        this.$emit("hotkey", { key });
       });
     },
   },
