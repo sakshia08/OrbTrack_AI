@@ -1,4 +1,5 @@
-"""Command line: `orbtrack app`, `where ISS`, `passes ISS`, `catalog`, `history sync | status | show ISS`."""
+"""Command line: `orbtrack app`, `where ISS`, `passes ISS`, `catalog`, `history sync | status | show ISS`,
+`events [ISS] | detect | train | evaluate`."""
 
 import argparse
 import sys
@@ -124,6 +125,42 @@ def cmd_history(args) -> None:
               f"  {series['apogee_km'][i]:7.2f}  {change:+7.2f}  {series['source'][i]}{mark}")
 
 
+def cmd_events(args) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from orbtrack.data.history import HistoryStore
+    from orbtrack.detect import model
+
+    if args.action == "train":
+        path = model.default_model_path()
+        path.unlink(missing_ok=True)
+        detector = model.load_or_train(path)
+        print(f"Trained on {detector.trained_on}, alert threshold {detector.threshold:.3f}, saved to {path}")
+        print(model.evaluate(detector).text())
+        return
+    if args.action == "evaluate":
+        print(model.evaluate(model.load_or_train()).text())
+        return
+
+    store = HistoryStore()
+    if args.action == "detect":
+        events = model.detect_watchlist(store, model.load_or_train())
+        print(f"{len(events)} events in the history of {len(store.watchlist())} watched satellites")
+        return
+
+    # list
+    norad_id = None
+    if args.target:
+        norad_id = _pick(Catalog.from_celestrak(args.group, load.timescale()), args.target).norad_id
+    days = args.days or 30
+    events = store.events(since=datetime.now(UTC) - timedelta(days=days), norad_id=norad_id)
+    print(f"{len(events)} events in the last {days} days"
+          + ("" if events else " (history builds up while the app runs; try `orbtrack events detect`)"))
+    for e in events:
+        print(f"  {e['epoch']:%Y-%m-%d %H:%M}  {(e['name'] or str(e['norad_id']))[:22]:22s}  {e['kind']:12s}"
+              f"  {e['confidence']:4.0%}  {e['reason']}")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="orbtrack", description=__doc__)
     parser.add_argument("--group", default="active", help="CelesTrak group (default: active)")
@@ -156,8 +193,14 @@ def main(argv: list[str] | None = None) -> None:
     history.add_argument("--days", type=int, help="show: how far back (30); sync: Space-Track backfill (365)")
     history.set_defaults(func=cmd_history)
 
+    events = sub.add_parser("events", help="maneuvers and decays found in the orbit history")
+    events.add_argument("action", nargs="?", default="list", choices=["list", "detect", "train", "evaluate"])
+    events.add_argument("target", nargs="?", help="list: only this satellite")
+    events.add_argument("--days", type=int, help="list: how far back (30)")
+    events.set_defaults(func=cmd_events)
+
     args = parser.parse_args(argv)
-    if args.func in (cmd_app, cmd_history):
+    if args.func in (cmd_app, cmd_history, cmd_events):
         args.func(args)
     else:
         args.func(args, Catalog.from_celestrak(args.group, load.timescale()))

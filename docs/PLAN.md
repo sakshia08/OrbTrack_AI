@@ -60,11 +60,12 @@ Split into three parts, each committed and pushed on its own.
 
 ### 4b · Detector
 
-- [ ] Features from consecutive element sets (changes in mean motion, inclination, eccentricity, drag), per-satellite baselines
-- [ ] Labelled set: ISS reboosts, GEO station-keeping, hand-labelled events
-- [ ] scikit-learn model with an evaluation report; nightly detection job writes events to DuckDB
-- [ ] `orbtrack events` command
-- [ ] Gate: recall ≥ 80% at precision ≥ 70% on the labelled set
+- [x] Features from consecutive element sets (changes in semimajor axis, inclination, eccentricity), per-satellite baselines
+- [x] Labelled set: simulated TLE histories with ISS-style reboosts, LEO trims and GEO station-keeping (Space-Track is off, so there are no real past orbits yet)
+- [x] scikit-learn model with an evaluation report ([DETECTOR.md](DETECTOR.md)); detection after every snapshot and sync writes events to DuckDB
+- [x] `orbtrack events` command
+- [x] Gate: recall ≥ 80% at precision ≥ 70% on the labelled set (93% recall, 96% precision on an unseen simulated fleet)
+- [ ] Later: check against real ISS reboosts once there is past history (Space-Track login, or a few months of snapshots)
 
 ### 4c · Events on the globe
 

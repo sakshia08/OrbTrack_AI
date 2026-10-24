@@ -61,3 +61,12 @@ A plain-language record of what each phase built. The plan for upcoming phases i
 - **New commands:** `orbtrack history sync`, `status`, `show ISS` (reboosts marked ▲), `watch <satellite>`, `export <folder>`.
 - **On the follow card:** a glowing chart of the satellite's altitude over the last 90 days, where you can spot reboosts as steps up.
 - **Tests:** 14 new offline tests with a fake Space-Track server and temporary databases: duplicates ignored, snapshots keep only the watchlist, a reboost shows as a 1.5 km step, the rate limiter waits when the minute is full, and a second sync only asks for what is new. 80 tests in total, all passing.
+
+## Phase 4b · Detector
+
+- **Finds maneuvers by itself:** after every snapshot and sync, OrbTrack checks each watched satellite's history for orbit raises, orbit lowers, plane changes and low perigees (re-entry soon). It saves each one as an event with a time, a size, a confidence and a reason you can read, for example "mean altitude rose 1.46 km between 31 Jan 00:00 and 31 Jan 06:00 UTC, 38× its usual scatter".
+- **Judges each satellite against its own normal:** drag and natural drift are removed and every change is measured in units of that satellite's usual scatter, so one model works for the ISS, sun-synchronous satellites and geostationary ones. It also checks whether a change stuck (a burn) or snapped back (a bad fit).
+- **Learns without Space-Track:** there are no past orbits yet, so it trains on simulated TLE histories built to look like the real thing, with uneven update times, scatter, changing drag, bad fits, long gaps and burns caught across two fits. Training takes about 5 seconds and runs only once.
+- **Measured:** on 300 simulated satellites it never saw in training, it found 93% of burns, and 96% of what it flagged was real. That passes the gate (80% / 70%). A plain threshold on the same data gets 56% precision. Real-world numbers will be lower until it is checked on real ISS reboosts. docs/DETECTOR.md explains it all.
+- **New commands:** `orbtrack events` (also `events ISS`, `--days 90`), `events detect`, `events train`, `events evaluate`.
+- **Tests:** 12 new offline tests: a step that sticks versus a spike that snaps back, steady decay is not an event, raise, lower and plane change named correctly, rare false alarms on quiet history, the gate on an unseen fleet, the saved model reloads, and events are stored and replaced on rerun. 92 tests in total, all passing.

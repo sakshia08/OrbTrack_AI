@@ -4,6 +4,8 @@
   and the watchlist's orbits go into the history store
 - every night (and shortly after start if it has not run for a day): fetch new Space-Track
   history for the watchlist, when a Space-Track login is configured
+- after every snapshot and sync: look for maneuvers in the watchlist's history (13 satellites
+  take well under a second; the first run trains the model, about 5 s)
 """
 
 import logging
@@ -17,6 +19,7 @@ from orbtrack.data.celestrak import fetch_group
 from orbtrack.data.history import HistoryStore
 from orbtrack.data.spacetrack import SpaceTrackError
 from orbtrack.data.sync import snapshot, sync_spacetrack
+from orbtrack.detect.model import detect_watchlist, load_or_train
 from orbtrack.engine import Catalog
 
 log = logging.getLogger("orbtrack")
@@ -25,7 +28,8 @@ CATALOG_EVERY = timedelta(hours=2, minutes=5)  # just over CelesTrak's update in
 NIGHTLY_HOUR = 3  # local time
 
 # The live catalog shared by every page. `version` goes up on each refresh so pages can notice.
-state: dict = {"catalog": None, "records": None, "group": "active", "version": 0, "store": None}
+state: dict = {"catalog": None, "records": None, "group": "active", "version": 0, "store": None,
+                "detector": None}
 
 
 def load_catalog() -> None:
@@ -43,10 +47,23 @@ def store() -> HistoryStore:
     return state["store"]
 
 
+def find_events() -> list:
+    if state["detector"] is None:
+        state["detector"] = load_or_train()
+    return detect_watchlist(store(), state["detector"])
+
+
+async def detect_events() -> None:
+    events = await run.io_bound(find_events)
+    if events is not None:
+        log.warning("OrbTrack events: %d maneuvers and decays in the watchlist's history", len(events))
+
+
 async def save_snapshot() -> None:
     result = await run.io_bound(snapshot, store(), state["records"])
     if result is not None:
         log.warning("OrbTrack history: %s", result)
+    await detect_events()
 
 
 async def refresh_catalog() -> None:
@@ -70,6 +87,7 @@ async def nightly_sync() -> None:
         return
     if result is not None:
         log.warning("OrbTrack history: %s", result)
+    await detect_events()
 
 
 def spacetrack_overdue() -> bool:

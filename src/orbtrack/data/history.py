@@ -1,8 +1,9 @@
 """Orbit history: every element set we have ever seen, in one local DuckDB file.
 
-Rows come from Space-Track (``gp_history``, a year of backfill) and from CelesTrak
-snapshots (the whole catalog, every time the app refreshes it). A satellite + epoch
-pair is stored once, so re-downloading the same data is harmless.
+Rows come from CelesTrak snapshots (the watchlist's part of every catalog refresh) and,
+when a login is set, Space-Track (``gp_history``, a year of backfill). A satellite + epoch
+pair is stored once, so re-downloading the same data is harmless. Maneuvers the detector
+finds live alongside, in ``events``.
 
 Connections are opened per call and closed straight away, so the app and the
 ``orbtrack history`` command can take turns with the same file.
@@ -49,6 +50,14 @@ CREATE TABLE IF NOT EXISTS elements (
 CREATE TABLE IF NOT EXISTS watchlist (norad_id INTEGER PRIMARY KEY, added_at TIMESTAMP);
 CREATE TABLE IF NOT EXISTS syncs (
     synced_at TIMESTAMP, source VARCHAR, satellites INTEGER, fetched INTEGER, added INTEGER, note VARCHAR
+);
+CREATE TABLE IF NOT EXISTS events (
+    norad_id INTEGER NOT NULL,
+    epoch TIMESTAMP NOT NULL,  -- first element set after the change
+    before_epoch TIMESTAMP,
+    name VARCHAR, kind VARCHAR, delta_a_km DOUBLE, delta_i_deg DOUBLE, confidence DOUBLE, reason VARCHAR,
+    detected_at TIMESTAMP,
+    PRIMARY KEY (norad_id, epoch, kind)
 );
 CREATE OR REPLACE VIEW orbits AS
 SELECT *,
@@ -146,6 +155,18 @@ class HistoryStore:
             for n in norad_ids:
                 con.execute("DELETE FROM watchlist WHERE norad_id = ?", [int(n)])
 
+    def replace_events(self, norad_id: int, events: list) -> None:
+        """Swap in a fresh detection for one satellite (a rerun with more data can drop or add events)."""
+        now = datetime.now(UTC).replace(tzinfo=None)
+        with self._connect() as con:
+            con.execute("DELETE FROM events WHERE norad_id = ?", [int(norad_id)])
+            for e in events:
+                con.execute(
+                    "INSERT OR REPLACE INTO events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [int(norad_id), e.epoch, e.before_epoch, e.name, e.kind, e.delta_a_km, e.delta_i_deg,
+                     e.confidence, e.reason, now],
+                )
+
     # --- Reading ------------------------------------------------------------
 
     def watchlist(self) -> list[int]:
@@ -185,6 +206,28 @@ class HistoryStore:
         out["epoch"] = np.array(cols[0], dtype="datetime64[us]")
         out["source"] = np.array(cols[-1])
         return out
+
+    def names(self, norad_ids: Iterable[int]) -> dict[int, str]:
+        """The most recent name each satellite was published under."""
+        ids = [int(n) for n in norad_ids]
+        with self._connect() as con:
+            return dict(con.execute(
+                "SELECT norad_id, arg_max(name, epoch) FROM elements WHERE norad_id IN (SELECT unnest(?))"
+                " GROUP BY norad_id", [ids]).fetchall())
+
+    def events(self, since: datetime | None = None, norad_id: int | None = None) -> list[dict]:
+        """Detected events, newest first."""
+        sql, params = "SELECT * FROM events WHERE true", []
+        if since is not None:
+            sql += " AND epoch >= ?"
+            params.append(since.replace(tzinfo=None))
+        if norad_id is not None:
+            sql += " AND norad_id = ?"
+            params.append(int(norad_id))
+        with self._connect() as con:
+            cur = con.execute(sql + " ORDER BY epoch DESC", params)
+            names = [d[0] for d in cur.description]
+            return [dict(zip(names, row, strict=True)) for row in cur.fetchall()]
 
     def status(self) -> dict:
         with self._connect() as con:

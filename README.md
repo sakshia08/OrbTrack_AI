@@ -29,7 +29,7 @@ Set your location with `ORBTRACK_HOME="lat,lon,elevation_m"` (default: Bangalore
 
 ### Orbit history
 
-OrbTrack keeps every orbit it sees in a local DuckDB file (`~/.local/share/orbtrack/history.duckdb`, override with `ORBTRACK_DATA`). For the satellites on the watchlist, the app saves CelesTrak's latest orbits every 2 hours, so history keeps growing (only a few MB a year). CelesTrak only knows each satellite's current orbit, so with a free [Space-Track.org](https://www.space-track.org) account OrbTrack also downloads a year of past orbits for the watchlist, then tops it up every night. The maneuver detector needs that past to learn from.
+OrbTrack keeps every orbit it sees in a local DuckDB file (`~/.local/share/orbtrack/history.duckdb`, override with `ORBTRACK_DATA`). For the satellites on the watchlist, the app saves CelesTrak's latest orbits every 2 hours, so history keeps growing (only a few MB a year). CelesTrak only knows each satellite's current orbit, so with a free [Space-Track.org](https://www.space-track.org) account OrbTrack also downloads a year of past orbits for the watchlist, then tops it up every night. The maneuver detector needs that past before it can find anything.
 
 Put your login in a `.env` file in the repo folder (it is git-ignored):
 
@@ -46,6 +46,16 @@ uv run orbtrack history watch NOAA 20  # add a satellite to the Space-Track watc
 uv run orbtrack history export out/    # Parquet files, one folder per year
 ```
 
+### Maneuver detector
+
+After every snapshot the app looks through the watchlist's history for orbit raises, lowers, plane changes and low perigees, and stores them as events. It is a scikit-learn model trained on simulated TLE histories with known burns: 96% precision and 93% recall on satellites it never saw in training. See [docs/DETECTOR.md](docs/DETECTOR.md) for how it works and its limits.
+
+```bash
+uv run orbtrack events            # maneuvers in the last 30 days (events ISS, --days 90)
+uv run orbtrack events detect     # run it over the watchlist now
+uv run orbtrack events train      # retrain (about 5 s) and print the evaluation report
+```
+
 ## Layout
 
 | Path | What |
@@ -54,12 +64,15 @@ uv run orbtrack history export out/    # Parquet files, one folder per year
 | `src/orbtrack/data/spacetrack.py` | Space-Track client (`gp_history`, `decay`), rate-limited |
 | `src/orbtrack/data/history.py` | DuckDB orbit history store, Parquet export |
 | `src/orbtrack/data/sync.py` | CelesTrak snapshots and Space-Track backfill into the store |
+| `src/orbtrack/detect/features.py` | Per-step features: robust z-scores against each satellite's own normal |
+| `src/orbtrack/detect/synthetic.py` | Simulated TLE histories with labelled burns, for training and grading |
+| `src/orbtrack/detect/model.py` | The detector (gradient-boosted trees), threshold choice, evaluation report |
 | `src/orbtrack/engine/catalog.py` | Satellite catalog, name/NORAD lookup, orbit classes |
 | `src/orbtrack/engine/propagate.py` | Vectorised SGP4 for the whole catalog, ground tracks |
 | `src/orbtrack/engine/passes.py` | Passes over an observer, naked-eye visibility |
 | `src/orbtrack/app/main.py` | The web page: globe, HUD, palette, your-sky panel, timers that push data to the browser |
 | `src/orbtrack/app/frames.py` | Positions, trails, Sun, passes and sky geometry, packed for the browser |
-| `src/orbtrack/app/jobs.py` | Background jobs (APScheduler): catalog refresh, history snapshots, nightly sync |
+| `src/orbtrack/app/jobs.py` | Background jobs (APScheduler): catalog refresh, history snapshots, nightly sync, detection |
 | `src/orbtrack/app/sparkline.py` | Altitude-history sparkline for the follow card |
 | `src/orbtrack/app/clock.py` | The time machine: a simulated clock with rates, pause and jumps |
 | `src/orbtrack/app/palette.py` | Ctrl+K command palette: keywords to actions, no LLM |
