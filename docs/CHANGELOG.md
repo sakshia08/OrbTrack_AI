@@ -93,3 +93,13 @@ A plain-language record of what each phase built. The plan for upcoming phases i
   - One of them caught a real bug: comparing orbits at the same time breaks when two element sets disagree on where the satellite is along its orbit, so replays now compare them at the same angle.
   - 104 tests in total, all passing.
 - **Screenshots** of the events panel, the replays, the palette and the phone layout are in `docs/screenshots/phase-4/`, with a short guide.
+
+## Phase 5a · Close-approach screening
+
+- **Finds close approaches:** every 6 hours the app checks each watchlist satellite against about 19,500 objects (every active satellite plus CelesTrak's four big debris clouds) for the next 72 hours. It saves every approach closer than 10 km with the exact time, the miss distance, the relative speed, and how old each satellite's orbit data will be by then.
+- **Fast enough to run in the background:** an altitude filter drops objects that can never meet, then everything is propagated together and each near miss is pinned down to the millisecond. A full run takes about a minute, in a separate process so the globe never stutters.
+- **Checked against the real thing:** CelesTrak's SOCRATES service screens the whole catalog daily and publishes the data it used. Recomputing its 25 closest conjunctions for the watchlist from that same data gives the same answers: times to the millisecond and distances within half a metre. That passes the 5a gate.
+- **What it finds:** in the first run, Hubble (which now flies inside a Starlink shell) had hundreds of Starlink passes under 10 km, closest 0.25 km, and Landsat 9 passed 0.53 km from a Fengyun 1C debris fragment.
+- **Honest about coverage:** CelesTrak doesn't publish the full catalog, so debris outside the four big clouds is missing. That leaves Hubble fully covered but the Earth-observation satellites only about 40% covered. A Space-Track login would fill the gap. docs/CONJUNCTIONS.md explains it all.
+- **New commands:** `orbtrack conjunctions` (also `conjunctions ISS`, `--km 2`), `conjunctions screen`, `conjunctions socrates`.
+- **Tests:** 10 new offline tests on two orbits built to cross. They check that the screening matches a brute-force search at 1-second steps, finds every close pass, gives the same answer across chunk boundaries, ignores docked and far objects, stores and replaces approaches correctly, and that the SOCRATES parser and comparison work. 114 tests in total, all passing.

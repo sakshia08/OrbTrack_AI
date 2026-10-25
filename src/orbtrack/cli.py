@@ -1,5 +1,5 @@
 """Command line: `orbtrack app`, `where ISS`, `passes ISS`, `catalog`, `history sync | status | show ISS`,
-`events [ISS] | detect | train | evaluate`."""
+`events [ISS] | detect | train | evaluate`, `conjunctions [ISS] | screen`."""
 
 import argparse
 import sys
@@ -161,6 +161,50 @@ def cmd_events(args) -> None:
               f"  {e['confidence']:4.0%}  {e['reason']}")
 
 
+def cmd_conjunctions(args) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from orbtrack.data.history import HistoryStore
+    from orbtrack.data.sync import SCREEN_KM, screen_watchlist
+
+    if args.action == "socrates":
+        from orbtrack.data import socrates
+
+        store = HistoryStore()
+        ids = store.watchlist() if not args.target else [
+            _pick(Catalog.from_celestrak(args.group, load.timescale()), args.target).norad_id]
+        checks = socrates.check(ids, per_satellite=args.limit)
+        print("SOCRATES conjunctions recomputed from the same element sets:")
+        print("  TCA (UTC)            range km  Δt s    Δrange m  Δspeed m/s  pair")
+        for k in checks:
+            c = k.conjunction
+            diff = (f"{k.tca_diff_s:+6.3f}  {k.range_diff_m:+8.1f}  {k.speed_diff_m_s:+9.1f}"
+                    if k.tca_diff_s is not None else "   not found              ")
+            print(f"  {c.tca:%m-%d %H:%M:%S.%f}"[:24] + f"  {c.range_km:7.3f}  {diff}   {c.first_name} × {c.second_name}")
+        matched = sum(k.matched for k in checks)
+        print(f"{matched} of {len(checks)} reproduced (TCA within 1 s and range within 50 m)")
+        return
+
+    store = HistoryStore()
+    if args.action == "screen":
+        print(screen_watchlist(hours=args.hours, km=args.km or SCREEN_KM))
+    norad_id = None
+    if args.target:
+        norad_id = _pick(Catalog.from_celestrak(args.group, load.timescale()), args.target).norad_id
+    now = datetime.now(UTC)
+    found = store.approaches(since=now, until=now + timedelta(hours=args.hours), norad_id=norad_id)
+    if args.km:
+        found = [a for a in found if a["miss_km"] <= args.km]
+    print(f"{len(found)} close approaches in the next {args.hours:g} h"
+          + ("" if found else " (run `orbtrack conjunctions screen`, or let the app do it)"))
+    print("  TCA (UTC)         miss km  km/s  TLE age h  pair")
+    for a in found[: args.limit]:
+        print(f"  {a['tca']:%m-%d %H:%M:%S}  {a['miss_km']:7.2f} {a['speed_km_s']:5.1f}  {a['primary_age_h']:4.0f}/"
+              f"{a['secondary_age_h']:<4.0f}  {a['primary_name']} × {a['secondary_name']}")
+    if len(found) > args.limit:
+        print(f"  … and {len(found) - args.limit} more (--limit)")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="orbtrack", description=__doc__)
     parser.add_argument("--group", default="active", help="CelesTrak group (default: active)")
@@ -199,8 +243,16 @@ def main(argv: list[str] | None = None) -> None:
     events.add_argument("--days", type=int, help="list: how far back (30)")
     events.set_defaults(func=cmd_events)
 
+    conj = sub.add_parser("conjunctions", help="close approaches to the watchlist in the coming days")
+    conj.add_argument("action", nargs="?", default="list", choices=["list", "screen", "socrates"])
+    conj.add_argument("target", nargs="?", help="only approaches involving this satellite")
+    conj.add_argument("--hours", type=float, default=72)
+    conj.add_argument("--km", type=float, help="only approaches closer than this (screening uses 10)")
+    conj.add_argument("--limit", type=int, default=20, help="rows to show; socrates: conjunctions per satellite")
+    conj.set_defaults(func=cmd_conjunctions)
+
     args = parser.parse_args(argv)
-    if args.func in (cmd_app, cmd_history, cmd_events):
+    if args.func in (cmd_app, cmd_history, cmd_events, cmd_conjunctions):
         args.func(args)
     else:
         args.func(args, Catalog.from_celestrak(args.group, load.timescale()))

@@ -58,6 +58,16 @@ uv run orbtrack events train      # retrain (about 5 s) and print the evaluation
 
 In the app, events show as pulsing beacons on the globe, marks on the time machine bar and a list under the legend. Click one (or type "maneuvers this week" or "events ISS" in Ctrl+K) to replay it: the orbit before the event and after it, rebuilt from the stored element sets, with a ghost satellite flying into the burn. A 1.5 km reboost is invisible at globe scale, so the gap between the two orbits is drawn larger, and the replay says by how much. Until the detector has found something, "Show demo events" plays a few made-up but realistic ones, marked DEMO everywhere.
 
+### Close approaches
+
+Every 6 hours the app screens the watchlist against about 19,500 objects (active satellites and CelesTrak's published debris clouds) for the next 72 hours, and keeps every approach closer than 10 km. Checked against CelesTrak's SOCRATES: 25 of 25 conjunctions reproduced to the millisecond. See [docs/CONJUNCTIONS.md](docs/CONJUNCTIONS.md) for the method, coverage and limits.
+
+```bash
+uv run orbtrack conjunctions            # predicted approaches, nearest first (conjunctions ISS, --km 2)
+uv run orbtrack conjunctions screen     # screen now (about a minute)
+uv run orbtrack conjunctions socrates   # compare with SOCRATES
+```
+
 ## Layout
 
 | Path | What |
@@ -65,10 +75,12 @@ In the app, events show as pulsing beacons on the globe, marks on the time machi
 | `src/orbtrack/data/celestrak.py` | CelesTrak GP client (OMM JSON), cached on disk |
 | `src/orbtrack/data/spacetrack.py` | Space-Track client (`gp_history`, `decay`), rate-limited |
 | `src/orbtrack/data/history.py` | DuckDB orbit history store, Parquet export |
-| `src/orbtrack/data/sync.py` | CelesTrak snapshots and Space-Track backfill into the store |
+| `src/orbtrack/data/sync.py` | CelesTrak snapshots, Space-Track backfill and close-approach screening into the store |
 | `src/orbtrack/detect/features.py` | Per-step features: robust z-scores against each satellite's own normal |
 | `src/orbtrack/detect/synthetic.py` | Simulated TLE histories with labelled burns, for training and grading |
 | `src/orbtrack/detect/model.py` | The detector (gradient-boosted trees), threshold choice, evaluation report |
+| `src/orbtrack/data/socrates.py` | CelesTrak SOCRATES client, to check our screening against theirs |
+| `src/orbtrack/engine/conjunctions.py` | Close-approach screening: altitude filter, coarse pass, TCA refinement |
 | `src/orbtrack/engine/catalog.py` | Satellite catalog, name/NORAD lookup, orbit classes |
 | `src/orbtrack/engine/propagate.py` | Vectorised SGP4 for the whole catalog, ground tracks |
 | `src/orbtrack/engine/passes.py` | Passes over an observer, naked-eye visibility |

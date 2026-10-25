@@ -3,7 +3,7 @@
 Rows come from CelesTrak snapshots (the watchlist's part of every catalog refresh) and,
 when a login is set, Space-Track (``gp_history``, a year of backfill). A satellite + epoch
 pair is stored once, so re-downloading the same data is harmless. Maneuvers the detector
-finds live alongside, in ``events``.
+finds live alongside, in ``events``, and predicted close approaches in ``approaches``.
 
 Connections are opened per call and closed straight away, so the app and the
 ``orbtrack history`` command can take turns with the same file.
@@ -58,6 +58,15 @@ CREATE TABLE IF NOT EXISTS events (
     name VARCHAR, kind VARCHAR, delta_a_km DOUBLE, delta_i_deg DOUBLE, confidence DOUBLE, reason VARCHAR,
     detected_at TIMESTAMP,
     PRIMARY KEY (norad_id, epoch, kind)
+);
+CREATE TABLE IF NOT EXISTS approaches (
+    primary_id INTEGER NOT NULL,
+    secondary_id INTEGER NOT NULL,
+    tca TIMESTAMP NOT NULL,  -- time of closest approach, UTC
+    primary_name VARCHAR, secondary_name VARCHAR,
+    miss_km DOUBLE, speed_km_s DOUBLE, primary_age_h DOUBLE, secondary_age_h DOUBLE,
+    screened_at TIMESTAMP,
+    PRIMARY KEY (primary_id, secondary_id, tca)
 );
 CREATE OR REPLACE VIEW orbits AS
 SELECT *,
@@ -167,6 +176,18 @@ class HistoryStore:
                      e.confidence, e.reason, now],
                 )
 
+    def replace_approaches(self, start: datetime, approaches: list) -> None:
+        """A new screening replaces every predicted approach from ``start`` on; past ones stay as history."""
+        now = datetime.now(UTC).replace(tzinfo=None)
+        with self._connect() as con:
+            con.execute("DELETE FROM approaches WHERE tca >= ?", [start.astimezone(UTC).replace(tzinfo=None)])
+            for a in approaches:
+                con.execute(
+                    "INSERT OR REPLACE INTO approaches VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [a.primary, a.secondary, a.tca.astimezone(UTC).replace(tzinfo=None), a.primary_name,
+                     a.secondary_name, a.miss_km, a.speed_km_s, a.primary_age_h, a.secondary_age_h, now],
+                )
+
     # --- Reading ------------------------------------------------------------
 
     def watchlist(self) -> list[int]:
@@ -247,6 +268,24 @@ class HistoryStore:
             params.append(int(norad_id))
         with self._connect() as con:
             cur = con.execute(sql + " ORDER BY epoch DESC", params)
+            names = [d[0] for d in cur.description]
+            return [dict(zip(names, row, strict=True)) for row in cur.fetchall()]
+
+    def approaches(self, since: datetime | None = None, until: datetime | None = None,
+                   norad_id: int | None = None) -> list[dict]:
+        """Stored close approaches, nearest first."""
+        sql, params = "SELECT * FROM approaches WHERE true", []
+        if since is not None:
+            sql += " AND tca >= ?"
+            params.append(since.astimezone(UTC).replace(tzinfo=None))
+        if until is not None:
+            sql += " AND tca <= ?"
+            params.append(until.astimezone(UTC).replace(tzinfo=None))
+        if norad_id is not None:
+            sql += " AND (primary_id = ? OR secondary_id = ?)"
+            params += [int(norad_id), int(norad_id)]
+        with self._connect() as con:
+            cur = con.execute(sql + " ORDER BY miss_km", params)
             names = [d[0] for d in cur.description]
             return [dict(zip(names, row, strict=True)) for row in cur.fetchall()]
 

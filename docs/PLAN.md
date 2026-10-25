@@ -74,3 +74,28 @@ Split into three parts, each committed and pushed on its own.
 - [x] Palette: "maneuvers this week", "events ISS"
 - [x] Demo events (clearly marked) until real history has built up
 - [x] Gate: click an ISS reboost and watch it replay (checked with the demo reboost; a real one needs history first)
+
+## Phase 5 · Conjunction watch & space weather
+
+Split into three parts, each committed and pushed on its own.
+
+### 5a · Screening engine
+
+- [x] Watchlist against the catalog for the next 72 h: altitude filter, vectorised coarse pass, Newton refinement of each TCA
+- [x] Screens against active satellites plus CelesTrak's four debris clouds (about 19,500 objects); Space-Track's full catalog can drop in later
+- [x] Approaches stored in DuckDB (a rescreen replaces the future and keeps the past); screening every 6 h in a background process
+- [x] `orbtrack conjunctions | screen | socrates`
+- [x] Gate: known close approaches reproduced: 25 of 25 SOCRATES conjunctions recomputed from the same element sets, TCA to the millisecond and range within half a metre ([CONJUNCTIONS.md](CONJUNCTIONS.md))
+
+### 5b · Close approaches on the globe
+
+- [ ] Approaches panel and beacons; click one to replay the two objects converging, with a line between them at TCA
+- [ ] Element-set age shown with every approach, as a plain warning
+- [ ] Palette: "close approaches", "close approaches Hubble"
+- [ ] Gate: replay works end to end
+
+### 5c · Space weather
+
+- [ ] NOAA SWPC Kp and F10.7, fetched and cached
+- [ ] Space-weather chip in the HUD, and context beside drag and decay events
+- [ ] Gate: shows current values offline-cached, and works when NOAA is unreachable

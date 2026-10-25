@@ -6,6 +6,8 @@
   history for the watchlist, when a Space-Track login is configured
 - after every snapshot and sync: look for maneuvers in the watchlist's history (13 satellites
   take well under a second; the first run trains the model, about 5 s)
+- every 6 h (and a minute after start): screen the watchlist for close approaches over the
+  next 72 h, in a separate process because it keeps a CPU busy for most of a minute
 """
 
 import logging
@@ -18,7 +20,7 @@ from orbtrack.config import spacetrack_credentials
 from orbtrack.data.celestrak import fetch_group
 from orbtrack.data.history import HistoryStore
 from orbtrack.data.spacetrack import SpaceTrackError
-from orbtrack.data.sync import snapshot, sync_spacetrack
+from orbtrack.data.sync import screen_watchlist, snapshot, sync_spacetrack
 from orbtrack.detect.model import detect_watchlist, load_or_train
 from orbtrack.engine import Catalog
 
@@ -26,10 +28,12 @@ log = logging.getLogger("orbtrack")
 
 CATALOG_EVERY = timedelta(hours=2, minutes=5)  # just over CelesTrak's update interval
 NIGHTLY_HOUR = 3  # local time
+SCREEN_EVERY = timedelta(hours=6)
 
 # The live catalog shared by every page. `version` goes up on each refresh so pages can notice.
 state: dict = {"catalog": None, "records": None, "group": "active", "version": 0, "store": None,
-                "detector": None, "events_version": 0}
+                "detector": None, "events_version": 0,
+                "approaches_version": 0}
 
 
 def load_catalog() -> None:
@@ -91,6 +95,17 @@ async def nightly_sync() -> None:
     await detect_events()
 
 
+async def screen_approaches() -> None:
+    try:
+        result = await run.cpu_bound(screen_watchlist, store().path)
+    except Exception as e:  # noqa: BLE001  keep the app running; the next run tries again
+        log.warning("OrbTrack screening failed (%s)", e)
+        return
+    if result is not None:
+        state["approaches_version"] += 1
+        log.warning("OrbTrack: %s", result)
+
+
 def spacetrack_overdue() -> bool:
     last = store().status()["last_sync"].get("spacetrack")
     return last is None or datetime.now(UTC).replace(tzinfo=None) - last > timedelta(hours=24)
@@ -104,6 +119,8 @@ async def start() -> None:
                       next_run_time=now + CATALOG_EVERY)
     scheduler.add_job(nightly_sync, "cron", hour=NIGHTLY_HOUR, minute=17)
     scheduler.add_job(save_snapshot, "date", run_date=now + timedelta(seconds=20))
+    scheduler.add_job(screen_approaches, "interval", seconds=SCREEN_EVERY.total_seconds(),
+                      next_run_time=now + timedelta(seconds=60))
     if spacetrack_credentials() and spacetrack_overdue():
         scheduler.add_job(nightly_sync, "date", run_date=now + timedelta(seconds=45))
     scheduler.start()
